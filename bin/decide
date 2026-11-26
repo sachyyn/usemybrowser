@@ -1,0 +1,140 @@
+#!/usr/bin/env python3
+"""decide: ask Gemini Decision 1 one question about many items, get calibrated probabilities.
+
+Docs: https://aistudio.google.com/docs/decisions-api (REST, v1beta, model gemini-decision-1).
+One request per item, run in parallel, so items never see each other.
+
+Usage:
+  decide -q "Is this result about Helium release notes?" "item one" "item two"
+  decide -q "Which bucket?" --choices docs,code,other - < items.txt      # one item per line
+  decide -q "Is a login form visible?" @/path/shot.png                    # image or PDF item
+  decide -q "Is it a defect?" --yes "Product is broken" --no "Preference or shipping" "..."
+
+Output: one JSON object per item (JSON lines), in input order.
+Key: $GEMINI_API_KEY, else macOS Keychain item "gemini-api-key".
+"""
+import argparse
+import base64
+import json
+import mimetypes
+import os
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.request
+from concurrent.futures import ThreadPoolExecutor
+
+URL = "https://generativelanguage.googleapis.com/v1beta/decisions"
+MODEL = "gemini-decision-1"
+USD_PER_INPUT_TOKEN = 0.10 / 1_000_000  # gemini-decision-1 paid tier; output is always 0 tokens
+MEDIA = {"image/png", "image/jpeg", "image/webp", "image/gif", "application/pdf"}
+
+
+def api_key() -> str:
+    key = os.environ.get("GEMINI_API_KEY")
+    if key:
+        return key
+    out = subprocess.run(
+        ["security", "find-generic-password", "-s", "gemini-api-key", "-w"],
+        capture_output=True, text=True,
+    )
+    if out.returncode != 0:
+        sys.exit("decide: no key. Set GEMINI_API_KEY or add Keychain item 'gemini-api-key'.")
+    return out.stdout.strip()
+
+
+def build_input(item: str):
+    """Plain text, or @path for an image/PDF file sent inline as base64."""
+    if not item.startswith("@"):
+        return item
+    path = item[1:]
+    if not os.path.isfile(path):
+        sys.exit(f"decide: file not found: {path}")
+    mime = mimetypes.guess_type(path)[0]
+    if mime not in MEDIA:
+        sys.exit(f"decide: unsupported file type for {path} ({mime})")
+    data = base64.b64encode(open(path, "rb").read()).decode()
+    block = {"type": "document" if mime == "application/pdf" else "image",
+             "data": data, "mime_type": mime}
+    if block["type"] == "image":
+        block["resolution"] = "low"  # cheaper; enough for page-state checks
+    return [block]
+
+
+def build_question(args) -> dict:
+    if args.choices:
+        options = [c.strip() for c in args.choices.split(",") if c.strip()]
+        return {"type": "choice", "instructions": args.question,
+                "criteria": {o: "" for o in options}}
+    q = {"type": "noul", "instructions": args.question}
+    if args.yes or args.no:
+        q["criteria"] = {"true_description": args.yes or "", "false_description": args.no or ""}
+    return q
+
+
+def ask(key: str, item: str, question: dict) -> dict:
+    body = json.dumps({"model": MODEL, "input": build_input(item),
+                       "questions": {"q": question}}).encode()
+    req = urllib.request.Request(URL, data=body, method="POST", headers={
+        "x-goog-api-key": key, "Content-Type": "application/json"})
+    label = item if len(item) <= 120 else item[:117] + "..."
+    try:
+        with urllib.request.urlopen(req, timeout=60) as r:
+            res = json.load(r)
+    except urllib.error.HTTPError as e:
+        return {"item": label, "error": f"HTTP {e.code}: {e.read().decode()[:300]}"}
+    except urllib.error.URLError as e:
+        return {"item": label, "error": str(e.reason)}
+    a = res.get("answers", {}).get("q", {})
+    out = {"item": label, "confidence": a.get("confidence")}
+    if a.get("type") == "noul":
+        out["yes"] = a.get("noul")
+    else:
+        out["choice"] = a.get("choice")
+        out["probabilities"] = a.get("probabilities")
+    out["input_tokens"] = res.get("usage", {}).get("total_input_tokens")
+    return out
+
+
+def main() -> None:
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("-q", "--question", required=True)
+    p.add_argument("--choices", help="comma-separated options; makes it a pick-one question")
+    p.add_argument("--yes", help="what counts as yes")
+    p.add_argument("--no", help="what counts as no")
+    p.add_argument("-j", "--jobs", type=int, default=8, help="parallel requests (default 8)")
+    p.add_argument("items", nargs="+", help="text items, @file for image/PDF, or - for stdin lines")
+    args = p.parse_args()
+
+    items = []
+    for it in args.items:
+        items += [l for l in sys.stdin.read().splitlines() if l.strip()] if it == "-" else [it]
+    key, question = api_key(), build_question(args)
+    # Probe with the first item: auth or billing errors (401/402/403) would fail every item.
+    first = ask(key, items[0], question)
+    print(json.dumps(first, ensure_ascii=False), flush=True)
+    if str(first.get("error", "")).startswith(("HTTP 401", "HTTP 402", "HTTP 403")):
+        sys.exit("decide: stopped; account or key problem (see error above). Not retrying.")
+    results = [first]
+    with ThreadPoolExecutor(max_workers=max(1, args.jobs)) as pool:
+        for result in pool.map(lambda i: ask(key, i, question), items[1:]):
+            results.append(result)
+            print(json.dumps(result, ensure_ascii=False), flush=True)
+    log_usage(args.question, results)
+
+
+def log_usage(question: str, results: list) -> None:
+    """Append one line per run to ~/.local/state/decide/usage.jsonl for cost reviews."""
+    tokens = sum(r.get("input_tokens") or 0 for r in results)
+    entry = {"ts": time.strftime("%Y-%m-%dT%H:%M:%S"), "question": question[:200],
+             "items": len(results), "errors": sum("error" in r for r in results),
+             "input_tokens": tokens, "usd": round(tokens * USD_PER_INPUT_TOKEN, 6)}
+    path = os.path.expanduser("~/.local/state/decide/usage.jsonl")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "a") as f:
+        f.write(json.dumps(entry) + "\n")
+
+
+if __name__ == "__main__":
+    main()
