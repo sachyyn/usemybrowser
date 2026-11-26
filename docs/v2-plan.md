@@ -53,7 +53,16 @@ Relay and extension, pairing, the embedded script engine, the Playwright-style `
 
 ## Kept from v1
 
-`text`, `check`, `decide`, the skill, the lessons log, the ask-first list for irreversible actions, and the `helium` command name.
+`text`, `check`, `decide`, the skill, the lessons log, the ask-first list for irreversible actions, and `helium` as a command alias.
+
+## Any Chromium browser, not only Helium
+
+The engine attaches to a running browser through the remote debugging switch at `chrome://inspect/#remote-debugging`. Helium is one browser that has it; Chrome and other Chromium browsers do too.
+
+- Docs and the skill say "your browser" and name Helium as the one this was built and tested on.
+- The browser's profile folder becomes a setting (`USEMYBROWSER_DIR`, default: Helium's folder if present, else Chrome's). It is the only Helium-specific line in the wrapper.
+- The `helium` command name stays as an alias; the main command is named after the repo, `umb`.
+- The README lists which browsers were actually tested. Untested ones are listed as untested, not as supported.
 
 ## Open design question: how far page scripts go
 
