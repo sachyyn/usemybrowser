@@ -79,6 +79,52 @@ Problems this run found in v2:
 3. The "no lines match" message does not say what was searched.
 4. A text target that matches nothing gives no near-miss hint.
 
+## Google Sheets task, three tools, in dollars (2026-11-26)
+
+Harness in `bench/`. Task `sheets-sales`: build a sales workbook in a new Google Sheet through the web UI only (40 data rows, formula columns, formatting, a conditional format, a dropdown validation, a named range, a formula-driven summary tab with four blocks, a column chart). Apps Script, the Sheets API and uploads are not allowed.
+
+Every arm: a fresh headless agent on the same mid-size model, the same task text, personal instruction files off, an $8 cap and a 30-minute limit. Only the tool and its usage guide differ. Dollars are the agent's own reported cost at API prices. A script downloads the finished sheet and checks it; no model judges the result. One run per arm.
+
+| Measure | v1 (`helium`) | v2 (`umb`) | browse 0.1.5 |
+|---|---|---|---|
+| Cost | $0.64 | $0.57 | $0.41 |
+| Agent turns | 70 | 78 | 43 |
+| Time | 5.5 min | 5.6 min | 9.4 min |
+| Output tokens | 16.6k | 14.4k | 12.4k |
+| Cache re-read tokens | 2.19M | 1.69M | 0.85M |
+| Checker | all passed | all passed | all passed |
+
+The checker counted 27 items for v1 and v2 and 26 for browse, because it could not read the fill colour in browse's file. All counted items passed in every arm.
+
+Reading it:
+
+- All three tools finished a hard task correctly for well under a dollar.
+- browse was cheapest because it took the fewest turns. Its scripts can send real keystrokes, so one call can type a block of cells. It was slowest because it types at human-like speed by default.
+- v2 was 11% cheaper than v1 but took more turns, not fewer. Sheets draws its grid on a canvas that page scripts cannot type into, so the v2 agent fell back to one real key command at a time.
+- Cost follows turns: the conversation is re-read on every turn, and that re-reading is most of the bill.
+
+v2 usage log for its run: 187 commands, 10 failed, 26 repeats, 30,490 characters returned.
+
+| Command | Count | Failed | Seconds | Characters |
+|---|---|---|---|---|
+| `click` | 47 | 6 | 58.8 | 2,237 |
+| `press_key` | 33 | 0 | 14.0 | 3,959 |
+| `type_text` | 25 | 0 | 14.7 | 1,545 |
+| `run` | 23 | 0 | 34.3 | 2,252 |
+| `snap` | 21 | 0 | 10.1 | 10,873 |
+| `take_screenshot` | 14 | 0 | 3.4 | 1,293 |
+| `fill` | 10 | 4 | 9.1 | 267 |
+| `tabs` | 6 | 0 | 1.1 | 7,514 |
+
+What this says v2 needs:
+
+1. A way to send a sequence of real keys and text in one command, and from inside a `run` script. This is the largest gap against browse.
+2. `click` averages 1.25 s. Find out why.
+3. `press_key` prints about 120 characters per call and `tabs` about 1,250. Both should be near silent.
+4. Relative file paths for screenshots resolve against the daemon's start folder, not the caller's. Make them absolute in the wrapper.
+
+Limits: one run per arm, so differences of this size are suggestive. browse ran with default settings. The checker does not test whether the dropdown rejects bad input or how the chart looks.
+
 ### Not tested
 
 - Sites that reject scripted input (some banking and checkout pages).
