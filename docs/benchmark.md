@@ -10,7 +10,7 @@ One Mac, Helium, chrome-devtools-mcp 1.13.0. Each task ran once, in a fresh agen
 |---|---|---|---|---|---|
 | Gmail: find the newest email from one sender, read its body | 8 | 6 | 3 redundant | 68k | 63 s |
 | Shopping: top 3 results on three sites | 7 | 8 | 1 redundant | 67k | 70 s |
-| Screener: add 8 filter columns, read the table | not recorded | about 85 (agent's own count) | about 20 | not recorded | not recorded |
+| Screener: add 8 filter columns, read the table | 19 | about 85 (agent's own count) | about 20 | 74k | 238 s |
 
 What cost the most:
 
