@@ -7,7 +7,7 @@ cmd, tab, rc, ms, out_path, cache = sys.argv[1:7]
 out = open(out_path, errors="replace").read()
 host = None
 if cmd == "open":
-    m = re.match(r"(\d+) .* (https?://\S+)$", out.strip().split("\n")[-1])
+    m = re.match(r"(\d+) .* (https?://\S+)$", out.strip().split("\n")[0])
     tab, host = (m.group(1), urlparse(m.group(2)).hostname) if m else ("", None)
 elif tab.isdigit():
     try:
