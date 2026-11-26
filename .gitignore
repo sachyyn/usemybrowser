@@ -1,1 +1,3 @@
 bench/results/
+bench/work/*
+!bench/work/.gitkeep
