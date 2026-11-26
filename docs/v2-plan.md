@@ -2,11 +2,17 @@
 
 ## Goal
 
-Make browser tasks cost fewer agent turns and fail less often, without growing the tool.
+Make browser tasks cost fewer agent turns and fail less often, while the tool stays small and stays ours.
 
-v1 is cheap at reading pages. It is expensive at acting on them: each step is a separate command, element ids expire, clicks can land on covered elements, and the agent must make another call to see what a click did.
+v1 is cheap at reading pages. It is expensive at acting on them: each step is a separate command, the agent has to re-read the page to find what to click, clicks can land on covered elements, and it takes another call to see what a click did.
 
-v2 keeps the v1 reading tricks and swaps the engine underneath for [browse](https://github.com/anomalyco/browse) (MIT, reviewed at commit `27bdfbb`, v0.1.5), used as a command-line tool only.
+## Approach
+
+Keep the v1 engine (one chrome-devtools daemon, one Allow click, every profile visible). Take ideas and code from [browse](https://github.com/anomalyco/browse) where they solve those problems, and copy them into this repo.
+
+browse is a parts shelf, not a dependency. v2 does not install its relay, its extension or its updater.
+
+What that keeps from v1: no browser extension, no pairing, no debugging bar, no third-party binary with access to a logged-in browser, and a tool small enough to read.
 
 ## Success condition
 
@@ -15,129 +21,113 @@ Measured on the same three tasks, v2 against v1:
 - at least 40% fewer agent turns
 - no more page text entering the agent's context than v1
 - zero clicks that report success but did nothing
-- works in all browser profiles the user has paired
+- the wrapper and its helpers stay readable in one sitting (target: under 300 lines of our own code, vendored files not counted)
 
-If phase 0 does not show this, v2 stops being an engine swap and becomes "port two ideas into the v1 wrapper" (see Fallback).
+## Rules for borrowed code
 
-## Decisions already made
+- Source: browse at commit `27bdfbb` (v0.1.5), MIT.
+- Each copied file goes in `vendor/browse/` with its licence notice, and `vendor/README.md` records the file, source path, commit and any local change.
+- browse's `injected-script.js` is Playwright's code under Apache-2.0. Avoid it unless a phase proves it is needed; if used, keep its notice.
+- Copy only what a phase needs. Prefer taking an idea and writing ten lines over vendoring a thousand.
+- Rust code is read for its logic and rewritten as shell or page JavaScript. Nothing in v2 needs a compiler.
 
-| Decision | Choice | Why |
-|---|---|---|
-| Engine | browse relay + its browser extension | One script per task, stable element refs, covered-click checks, results that say what changed |
-| How agents call it | Shell command, not an MCP server | No tool descriptions sitting in every session's context |
-| Command name | `helium` stays as an alias; new name `umb` | Existing skills and habits keep working; browse supports more browsers than Helium |
-| Reading helpers | Keep `text`, `check`, `decide` | browse has no equivalent of `check`/`decide` |
-| Recipes | Script files in `recipes/`, not prose | A repeat task becomes one turn |
-| browse updates | Notify only, never auto-install | It has debugger access to a logged-in browser |
-| Human-like input | Off by default | Speed; turn on per site if a site blocks fast input |
-| Version pin | Install a named browse version, bump on purpose | browse ships daily |
+## What we take
 
-## Not doing
+| Problem in v1 | Idea from browse | How it lands here | Borrow |
+|---|---|---|---|
+| `compact` cuts at 150 lines blindly and drops plain text | Snapshot that scopes to the open dialog or main area, collapses nav menus, keeps the most important lines | `helium snap` runs browse's page capture script through `evaluate_script --sourcePath` and prints one short line per element | Code: `capture.js` (self-contained page function, returns entries with CSS selectors) |
+| Element ids change, so the agent re-reads the page | Refs that stay the same while the element does | Refs like `e12` map to the selectors the capture returns, saved per tab in `~/.cache/helium` | Idea |
+| Re-reading the whole page after each step | Changed-only snapshot | `helium snap --delta` diffs against the last saved snapshot for that tab | Idea |
+| One command per step | One script per task | `helium run <file> [json args]` runs a script in the page with a small helper set: find by role or text, wait, click, fill | Idea, plus parts of `helpers.js` if they save work |
+| Click reports success but lands on an overlay | Refuse a covered click and name what is on top | Helper checks the element at the click point before clicking | Idea (logic in `helpers.js`) |
+| A second call to see what a click did | Every action reports what changed | The wrapper prints one line after each action: URL, title, navigated or not, dialog, new tabs | Idea (`aftermath.rs`) |
+| No `wait_for` | Wait for text, a URL or an element | A polling helper in the page, exposed as `helium wait` and inside `run` | Idea |
+| Agent retries a blocked site in a loop | Detect bot checks and block pages | A short selector and phrase list checked after navigation, reported in the action line | Code: the selector list and rules from `challenge.rs`, rewritten in JS |
+| Clicking through a page to get data that is one JSON call | Use the site's own API | Recipe step: list network requests with the existing CLI, then fetch from inside the page | Idea |
+| "Don't touch my tabs" is only an instruction | Agents act only on tabs they opened or were lent | The wrapper records tabs it opened and refuses actions on others without `--lend` | Idea |
+| Login, 2FA and payment stop the task in chat | Handoff card with a Continue button on the page | `helium handoff <tab> "<message>"` injects a small card and waits for a real click | Idea (`handoff_card.rs`), last phase, only if cheap |
 
-- No fork of browse and no copy of its code.
-- No MCP server of our own.
-- No second engine running beside it. One connection, one ref system.
-- No Windows or Linux support work in v2 (browse supports them; we only test macOS).
-- No new abstraction layer. The wrapper stays a short shell script.
+## What we do not take
 
-## Phase 0: trial and measurement (go / no-go)
+Relay and extension, pairing, the embedded script engine, the Playwright-style `page` object, stealth and human-like input, screen recording, Firefox support, auto-update, and the installer for thirty agents.
 
-1. Install browse at a pinned version with `--agent none` (no agent configs touched), updates set to notify.
-2. Add the extension to one Helium profile and pair it.
-3. Run three tasks on v1 and on browse, same model, fresh session each:
-   - TickerTape screener: add 15 columns and export
-   - Gmail: search, open the right email, read the body
-   - Shopping search across Amazon.in, Flipkart, Meesho
-4. Record per run: agent turns, characters returned to the agent, wall time, failures, user prompts.
-5. Answer the open questions below.
-6. Write the numbers into `docs/benchmark.md`. Decide go or fallback.
+## Kept from v1
 
-Open questions phase 0 must answer:
+`text`, `check`, `decide`, the skill, the lessons log, the ask-first list for irreversible actions, and the `helium` command name.
 
-- Does browse run cleanly in Helium (pairing, tab groups, the debugging bar)?
-- Do three paired profiles work through one relay, and how is a profile picked per call?
-- How long does `browse execute` take to start for a one-line script?
-- Does the debugging bar get in the way in daily use? (User's call.)
-- Do recipes behave with human-like input off on Gmail and the shopping sites?
+## Open design question: how far page scripts go
 
-## Phase 1: the wrapper
+`helium run` executes inside the page. Two limits follow:
 
-`bin/umb` (zsh, target under 120 lines), with `helium` as a symlink.
+1. Clicks made by page JavaScript are synthetic. Some sites ignore them.
+2. A navigation ends the script, so a flow across pages is several `run` calls.
 
-| Command | Does | Built on |
-|---|---|---|
-| `umb run <file\|-> [json args]` | Run a whole task as one script | `browse execute --file -`; the wrapper prepends `const args = <json>;` because execute has no argument input |
-| `umb recipe <name> [json args]` | Run a saved recipe | `umb run recipes/<name>.js` |
-| `umb snap <tab> [--find re] [--delta] [--interactive]` | Page outline with refs | `browse snapshot` |
-| `umb text <tab> [css] [max]` | Plain text of one part of the page | `browse eval`, same JS as v1 |
-| `umb check <tab> "<question>"` | Visual yes/no, image never enters context | `browse screenshot --output` piped to `decide` |
-| `umb tabs`, `umb open <url> [--profile name]` | List and open tabs | `browse tabs`, `browse navigate` |
-| anything else | Passed through | `browse <tool>` |
+Phase 0 tests both on the benchmark tasks. The answers pick one of:
 
-Rules for the wrapper:
+- **A. Page scripts only.** Smallest. Chosen if synthetic clicks work on the benchmark sites and multi-page flows chain fine.
+- **B. Page script finds, daemon clicks.** The script returns the element's position and the wrapper sends a real click through the daemon (`click_at`, which needs one daemon flag and so one extra Allow click, once).
+- **C. Our own daemon on puppeteer-core.** Replaces the chrome-devtools CLI, still one connection. Scripts get a real `page` that survives navigation. About 300 more lines and a new dependency. Chosen only if A and B fail the benchmark.
 
-- Never starts a second relay or connection.
-- Prints only the result. No banners, no update notices.
-- Caps output size and says when it cut something, like v1's `text`.
-- Removed from v1: `compact`, `find`, uid handling.
+## Phases
 
-## Phase 2: recipes
+### Phase 0: baseline and spikes
 
-- `recipes/<site>-<task>.js`, each with a header comment: purpose, args, what it returns, date last verified.
-- First three, converted from v1's lessons: `gmail-search`, `tickertape-export`, `shop-search`.
-- Recipes return short strings or small JSON, never whole pages.
-- Where a site has a JSON call behind the page, the recipe fetches that from inside the page instead of clicking. Found with browse's network capture.
-- New recipes come from two places: an agent saving a script that worked, or `demonstrate` recording the user doing the flow once.
-- A recipe that fails says which step failed, so the agent falls back to `snap` and fixes the recipe.
+No install and nothing new in the browser.
 
-## Phase 3: the skill
+1. Run the three tasks on v1 in a fresh session each: TickerTape screener (add 15 columns, export), Gmail (search, open, read the body), shopping search across Amazon.in, Flipkart and Meesho. Record turns, characters returned, wall time, failures, user prompts.
+2. Spike: run `capture.js` through `evaluate_script --sourcePath` on Gmail, TickerTape and a docs page. Record output size against `compact` and whether its selectors resolve.
+3. Spike: synthetic click and fill on the benchmark sites. Note where they fail.
+4. Pick A, B or C. Write the numbers to `docs/benchmark.md`.
 
-Rewrite `skill/SKILL.md`, shorter than v1, around two rules:
+### Phase 1: snapshot and refs
 
-- **Reading, cheapest first:** recipe or API call, `text`, `snap --find`, `snap --delta`, `check`, screenshot.
-- **Acting:** look for a recipe; otherwise one `umb run` script that inspects, acts and verifies.
+- `helium snap <tab> [--find re] [--interactive] [--within css] [--delta] [--max n]`
+- Ref table per tab in `~/.cache/helium`; cleared when the tab navigates.
+- `compact` and `find` become aliases of `snap`, then go.
 
-Also in the skill:
+### Phase 2: acting
 
-- Profiles as named browsers.
-- Handoff for login, 2FA and payment, replacing "ask in chat".
-- Tab ownership: own tabs and lent tabs only. Open read tasks as read-only tabs.
-- The ask-first list for irreversible actions stays word for word.
-- `LESSONS.md` keeps its format. Site lessons that become recipes are deleted from it.
-- Removed: uid rules, the overlays section, the wait workaround.
+- `helium click|fill <tab> <ref>` resolve the ref, check nothing covers the element, act, then print the what-changed line.
+- `helium wait <tab> --text|--gone|--url|--ref`.
+- Bot-check detection in the what-changed line.
+- Update notices from the upstream CLI are filtered out of all output.
 
-## Phase 4: install and migration
+### Phase 3: scripts and recipes
 
-- `install.sh` installs the pinned browse, sets updates to notify, installs wrapper, recipes and skill, then prints the two manual steps (add the extension, pair each profile).
-- `install.sh --engine cdt` installs the v1 engine instead, for anyone who cannot use the extension.
-- v1 users: the old daemon keeps working until they run the v2 installer. `docs/migrating.md` lists the command changes.
-- README rewritten for v2, with the benchmark table.
+- `helium run <file|-> [json args]` and `helium recipe <name> [json args]`.
+- `recipes/<site>-<task>.js`, each with a header: purpose, args, returns, date last verified.
+- First three: `gmail-search`, `tickertape-export`, `shop-search`. Where a site has a JSON call behind the page, the recipe fetches that.
+- A failing recipe names the step that failed.
 
-## Phase 5: verify and release
+### Phase 4: safety
 
-- Rerun the three benchmark tasks through the finished wrapper and skill, in the real browser.
-- Cross-agent check: Claude Code, Codex and one other agent each list tabs and run one recipe.
-- Safety checks: a read-only tab refuses a click; an agent cannot touch a tab it did not open; a covered click fails with the blocker named; a handoff waits for a real click.
-- Tag `v2`, GitHub release with the benchmark numbers and the migration note.
+- Tab ownership with `--lend`.
+- `helium handoff`, if it fits in about 40 lines.
 
-## Fallback if phase 0 says no
+### Phase 5: skill, install, docs
 
-Stay on the v1 engine and port only:
+- `SKILL.md` rewritten, shorter, around two rules. Reading, cheapest first: recipe or API call, `text`, `snap --find`, `snap --delta`, `check`, screenshot. Acting: recipe first, else one `run` script that inspects, acts and verifies.
+- Site lessons that became recipes leave `LESSONS.md`.
+- Installer copies `vendor/` and `recipes/`. Move to the current chrome-devtools-mcp version after testing it.
+- README updated with the benchmark table and the list of borrowed code.
 
-1. Network discovery plus in-page fetch recipes (the v1 engine already lists network requests).
-2. A better `compact`: scope to the main area or open dialog, and a changed-only mode that diffs against the saved snapshot.
-3. Silence the upstream update banner.
+### Phase 6: verify and release
+
+- Rerun the three tasks through the finished tool in the real browser.
+- Checks: covered click fails with the blocker named; action on a tab the wrapper did not open is refused; a ref survives a re-snapshot; a recipe runs in one turn.
+- One task each through two other agents.
+- Tag `v2`, release notes with the numbers.
 
 ## Risks
 
 | Risk | Handling |
 |---|---|
-| browse changes or breaks often | Pinned version, notify-only updates, v1 engine kept as an install option |
-| Extension has wide access to the browser | Documented plainly in the README; pairing is local; user reviews the store listing before installing |
-| The debugging bar annoys the user | Phase 0 decides; fallback path exists |
-| Recipes rot when sites change | Date-stamped, fail loudly at a named step, agent repairs them |
-| Per-profile pairing is clumsy | Phase 0 measures it; if bad, document one profile as the default |
+| `capture.js` does not run cleanly through `evaluate_script` | Phase 0 spike. Fallback: write a smaller capture of our own using the same three ideas (scope, collapse, rank). |
+| Synthetic clicks fail on key sites | Options B and C above |
+| Vendored code drifts from upstream | We do not track upstream. The copy is ours; the commit is recorded in case we want to compare later. |
+| The wrapper grows past readable | Line budget in the success condition; anything over it has to replace something |
+| Recipes rot when sites change | Date-stamped, fail at a named step, agent repairs them |
 
 ## Order of work
 
-Phase 0 is the only step that needs the user (installing an extension and pairing). Everything after it can be built and tested without interrupting them, except the final real-browser run.
+Phase 0 needs nothing from the user. Phases 1 to 5 can be built and tested against the running browser without interrupting them, as long as the daemon is not restarted. Option B's daemon flag and the final real-browser run are the only points that need the user.
