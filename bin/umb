@@ -116,9 +116,15 @@ fi
 # healthy daemon: each restart opens a new connection and the browser asks the user to Allow again.
 # A check that passed is remembered ($CACHE/daemon-ok) until the daemon's pid file changes, so most calls skip it.
 PIDF=/tmp/chrome-devtools-mcp-$UID/daemon.pid
-if ! { [[ -r $PIDF && $CACHE/daemon-ok -nt $PIDF ]] && kill -0 "$(<$PIDF)" 2>/dev/null; }; then
+# Listing commands need no browser, so they skip this. A daemon attached to ANOTHER browser folder is
+# left alone: restarting it would cut off whoever uses it and prompt the user (this happened once when
+# umb ran with a different HOME). Switching folders is an explicit `umb start`.
+NO_BROWSER=0; [[ "$1" == profiles || ( "$1" == recipe && $# -eq 1 ) ]] && NO_BROWSER=1
+if (( ! NO_BROWSER )) && ! { [[ -r $PIDF && $CACHE/daemon-ok -nt $PIDF ]] && kill -0 "$(<$PIDF)" 2>/dev/null; }; then
   STATUS=$(cdt status)
-  if [[ "$STATUS" != *"is running"* || "$STATUS" != *"$UMB_DIR"* ]]; then
+  if [[ "$STATUS" == *"is running"* && "$STATUS" != *"$UMB_DIR"* ]]; then
+    die "a daemon is already running for a different browser folder; not restarting it. This call wanted: $UMB_DIR. To switch on purpose: umb start"
+  elif [[ "$STATUS" != *"is running"* ]]; then
     start_daemon >/dev/null 2>&1 || die "could not start the daemon (sandboxed agent? run it outside the sandbox)"
   fi
   touch "$CACHE/daemon-ok"

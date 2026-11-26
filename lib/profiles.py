@@ -15,6 +15,8 @@ def load(path):
 
 state = load(os.path.join(d, "Local State")).get("profile", {})
 cache = state.get("info_cache", {})
+if not os.path.isdir(d):
+    sys.exit(f"umb: no browser folder at {d} (set USEMYBROWSER_DIR)")
 folders = [f for f in sorted(os.listdir(d)) if re.fullmatch(r"Default|Profile \d+", f) and os.path.isdir(os.path.join(d, f))]
 folders.sort(key=lambda f: (f != "Default", int(f.split()[-1]) if f != "Default" else 0))
 
