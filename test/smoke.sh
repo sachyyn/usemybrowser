@@ -50,6 +50,7 @@ ok "text, zero matches fails" 1 'matched 0 elements'          -- click $TAB 'tex
 
 ok "fill input"               0 'filled'                      -- fill $TAB $REF_NAME 'hello world'
 ok "input value kept"         0 'hello world'                 -- evaluate_script --pageId $TAB '() => document.getElementById("name").value'
+ok "text reads an input's value" 0 'hello world'           -- text $TAB '#name'
 absent "evaluate_script has no wrapper" 'Script ran on page'
 ok "fill select by label"     0 'set to "Green"'              -- fill $TAB $REF_SEL Green
 ok "fill select bad option"   1 'has no option'               -- fill $TAB $REF_SEL Purple
