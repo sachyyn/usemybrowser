@@ -14,6 +14,11 @@ elif tab.isdigit():
         host = urlparse(json.load(open(f"{cache}/state-{tab}.json")).get("url", "")).hostname
     except Exception:
         pass
+    if not host:  # no snap yet (or the state is gone): the host stored when the tab was opened
+        try: host = open(f"{cache}/tabs/host-{tab}").read().split()[2]
+        except Exception: pass
+elif cmd in ("note", "notes") and re.fullmatch(r"[A-Za-z0-9.-]+", sys.argv[7] if len(sys.argv) > 7 else ""):
+    host = sys.argv[7].lower()  # umb note <host>: the host is the argument (a site name, not page content)
 rec = {"ts": datetime.datetime.now().astimezone().isoformat(timespec="seconds"), "cmd": cmd,
        "tab": int(tab) if tab.isdigit() else None, "exit": int(rc), "chars": len(out), "ms": int(float(ms))}
 if host: rec["host"] = host

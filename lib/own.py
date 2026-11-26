@@ -16,7 +16,7 @@ live = {p["id"] for p in pages}
 def kinds():  # {id: set of kinds}, after dropping stale records
     out = {}
     for f in os.listdir(d):
-        m = re.fullmatch(r"(own|lend)-(\d+)", f)
+        m = re.fullmatch(r"(own|lend|host)-(\d+)", f)
         if not m: continue
         try: rec_pid = open(os.path.join(d, f)).read().split()[0]
         except (OSError, IndexError): rec_pid = None

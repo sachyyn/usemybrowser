@@ -18,7 +18,8 @@ if [[ -z "$UMB_INNER" ]]; then
   [[ "$1" == look ]] && UMB_EXTRA=$(mktemp)  # look.py writes the model's token counts here; log.py adds them to the line
   UMB_INNER=1 "${0:A}" "$@" > "$OUT"; rc=$?
   cat "$OUT"
-  [[ -n "$UMB_NO_LOG" ]] || python3 "$ROOT/lib/log.py" "$1" "$2" "$rc" "$(( (EPOCHREALTIME - t0) * 1000 ))" "$OUT" "$CACHE" 2>/dev/null
+  [[ -n "$UMB_NO_LOG" ]] || python3 "$ROOT/lib/log.py" "$1" "$2" "$rc" "$(( (EPOCHREALTIME - t0) * 1000 ))" "$OUT" "$CACHE" "$2" 2>/dev/null
+  [[ "$1" == close || "$1" == close_page ]] && rm -f "$CACHE/tabs/host-$2"  # kept until the close line is logged
   rm -f "$OUT" $UMB_EXTRA; exit $rc
 fi
 # Local install (npm --prefix ~/.local/share/helium-cdt chrome-devtools-mcp@1.13.0): fast, works offline/sandboxed.
@@ -56,7 +57,8 @@ case "$1" in
     echo "       umb wait <tab> [--text s] [--gone s] [--url s] [--ref eN|--css sel] [--timeout ms]"
     echo "       umb run <tab> <file.js | -> [json args] [--max n]   (script body; scope: args, umb.find/click/fill/wait/sleep/text)"
     echo "       umb recipe [name [json args] [--tab id]]   (--tab runs it in that open tab; sheets-* recipes need it)"
-    echo "       umb notes [host|tab]   proven idioms for a site (no argument: hosts that have notes); umb open prints a notes: line when there are some"
+    echo "       umb notes [host|tab]   proven idioms for a site, shipped then learned on this machine (no argument: hosts that have either); umb open prints a notes: line when there are some"
+    echo "       umb note <host|tab> \"<text>\"   save one line (max 300 chars: one command line and when to use it) for next visit to that site; works on any tab"
     echo "       umb open <url> [--profile <folder|name>]   UMB_PROFILE sets the default profile; --profile opens through the browser's own"
     echo "         launcher (open -g), which can bring that profile's window forward; without one, the tab goes to the active window"
     echo "       umb profiles   profile folders and names; the default for open is marked"
@@ -78,19 +80,36 @@ if [[ "$1" == profiles ]]; then
   exit 0
 fi
 
-# Site notes: one Markdown file per host in $UMB_NOTES (default: notes/ in the repo).
+# Site notes: shipped = one Markdown file per host in $UMB_NOTES (default: notes/ in the install); learned = one file per host
+# in $UMB_USER_NOTES (default ~/.config/umb/notes), written only by `umb note`.
 NOTES_DIR=${UMB_NOTES:-$ROOT/notes}
+USER_NOTES=${UMB_USER_NOTES:-$HOME/.config/umb/notes}
 site_host() { python3 -c 'import sys; from urllib.parse import urlparse; print(urlparse(sys.argv[1]).hostname or "")' "$1"; }
+tab_host() { site_host "$(pages | python3 -c '
+import json, sys
+t = sys.argv[1]
+print(next((p["url"] for p in json.load(sys.stdin)["pages"] if str(p["id"]) == t), ""))' "$1")"; }
+has_notes() { [[ "$1" =~ '^[A-Za-z0-9.-]+$' && ( -f "$NOTES_DIR/$1.md" || -f "$USER_NOTES/$1.md" ) ]]; }
 show_notes() {  # $1 = host
-  local f="$NOTES_DIR/$1.md"
-  [[ "$1" =~ '^[A-Za-z0-9.-]+$' && -f "$f" ]] || { echo "no notes for ${1:-that host}"; return 0; }
-  cat "$f"
+  local h=${1:l}
+  has_notes "$h" || { echo "no notes for ${1:-that host}"; return 0; }
+  [[ -f "$NOTES_DIR/$h.md" ]] && cat "$NOTES_DIR/$h.md"
+  [[ -f "$USER_NOTES/$h.md" ]] && { [[ -f "$NOTES_DIR/$h.md" ]] && echo; echo "## Learned on this machine"; cat "$USER_NOTES/$h.md"; }
+  return 0
+}
+add_note() {  # $1 = host (already resolved), $2 = text
+  [[ "$1" =~ '^[A-Za-z0-9.-]+$' ]] || die "not a host: ${1:-(empty)}"
+  python3 "$ROOT/lib/note.py" "$USER_NOTES" "${1:l}" "$2"
 }
 if [[ "$1" == notes && "$2" != <-> ]]; then
   if [ -z "$2" ]; then
-    for f in "$NOTES_DIR"/*.md(N); do echo ${${f:t}%.md}; done
+    { for f in "$NOTES_DIR"/*.md(N) "$USER_NOTES"/*.md(N); do echo ${${f:t}%.md}; done } | sort -u
   else show_notes "$2"; fi
   exit 0
+fi
+if [[ "$1" == note && "$2" != <-> ]]; then
+  [[ $# -eq 3 ]] || die "usage: umb note <host|tab> \"<one command line and when to use it>\""
+  add_note "$2" "$3"; exit $?
 fi
 
 # Start only when no daemon runs or the running one is not attached to this profile. Never restart a
@@ -431,13 +450,13 @@ case "$CMD" in
       out=$(open_tab "$url") || exit 1; echo "$out"
       (( $(python3 "$ROOT/lib/profiles.py" "$UMB_DIR" active-count) > 1 )) && echo "profile: unknown (set UMB_PROFILE or pass --profile to choose)"
     fi
-    h=$(site_host "$url"); [[ "$h" =~ '^[A-Za-z0-9.-]+$' && -f "$NOTES_DIR/$h.md" ]] && echo "notes: umb notes $h"; exit 0 ;;
-  notes)  # umb notes <tab id>
-    h=$(site_host "$(pages | python3 -c '
-import json, sys
-t = sys.argv[1]
-print(next((p["url"] for p in json.load(sys.stdin)["pages"] if str(p["id"]) == t), ""))' "$2")")
-    [ -n "$h" ] || die "no tab $2"; show_notes "$h" ;;
+    # The tab's host is stored at open time (host-<id>), so every later command on the tab can be logged with it.
+    first=${out%%$'\n'*}; h=$(site_host "${first##* }"); [ -n "$h" ] && print -r -- "$DPID $EPOCHSECONDS $h" > "$OWN/host-${out%% *}"
+    h=$(site_host "$url"); has_notes "${h:l}" && echo "notes: umb notes ${h:l}"; exit 0 ;;
+  notes|note)  # umb notes <tab id> | umb note <tab id> "<text>"
+    h=$(tab_host "$2"); [ -n "$h" ] || die "no tab $2"
+    if [[ $CMD == notes ]]; then show_notes "$h"
+    else [[ $# -eq 3 ]] || die "usage: umb note <host|tab> \"<one command line and when to use it>\""; add_note "$h" "$3"; exit $?; fi ;;
   tabs) pages | own_py tabs ;;
   lend)
     need_tab "$2"; listing=$(pages | own_py tabs); [[ $'\n'$listing == *$'\n'"$2 "* ]] || die "no tab $2"
@@ -449,7 +468,10 @@ print(next((p["url"] for p in json.load(sys.stdin)["pages"] if str(p["id"]) == t
     if has_record own "$2"; then :
     elif has_record lend "$2"; then [[ $3 == --force ]] || die "tab $2 was lent, not opened by umb; closing it needs: umb close $2 --force"
     else refuse "$2"; fi
-    close_tab "$2" ;;
+    h=; [[ -f "$OWN/host-$2" ]] && has_record host "$2" && has_record own "$2" && h=$(<"$OWN/host-$2")
+    close_tab "$2"
+    # Reminder to save what was learned; never fails or changes the close.
+    [[ -n $h && -z $UMB_NO_TIPS ]] && python3 "$ROOT/lib/tip.py" "${h##* }" "$(cut -d' ' -f2 <<<"$h")" "${UMB_TIPS_DIR:-$CACHE/tips}" 2>/dev/null || true ;;
   run)  # umb run <tab> <file.js | -> [json args] [--max n]
     need_act "$2"; split_proof "${@:3}"; set -- "$1" "$2" "${REST[@]}"; [ -n "$3" ] || die "usage: umb run <tab> <file.js | -> [json args] [--max n]"
     if [[ "$3" == - ]]; then BODY="$CACHE/body-$2.js"; cat > "$BODY"; else BODY=$3; [ -f "$BODY" ] || die "no such file: $3"; fi

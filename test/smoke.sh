@@ -10,6 +10,8 @@ PASS=0; FAIL=0; TAB=""; CALLS=1  # umb open is call 1
 TMPD=$(mktemp -d)
 cleanup() { [ -n "$TAB" ] && "$UMB" close "$TAB" >/dev/null 2>&1; kill $SRV 2>/dev/null; rm -rf "$TMPD"; }
 trap cleanup EXIT
+# Learned notes and close-tip stamps live in the temp folder, never in the real ~/.config/umb or ~/.cache/umb.
+export UMB_USER_NOTES="$TMPD/learned" UMB_TIPS_DIR="$TMPD/tips"
 
 # ok <name> <expected exit> <expected output substring> -- <umb args>; also leaves output in $OUT
 ok() {
@@ -151,6 +153,29 @@ absent "no notes line when none exist" 'notes:'
 "$UMB" close "${OUT%% *}" >/dev/null 2>&1; CALLS=$((CALLS+1))
 unset UMB_NOTES
 
+# Learned notes (umb note): shipped fixture notes for 127.0.0.1, learned lines in $UMB_USER_NOTES (a temp folder).
+export UMB_NOTES="$HERE/notes"
+ok "note adds a line"          0 'noted for 127.0.0.1 (1 learned lines)' -- note 127.0.0.1 'click css:#plain, use when the page has no refs'
+[[ "$(<"$UMB_USER_NOTES/127.0.0.1.md")" == "- $(date +%F) click css:#plain, use when the page has no refs" ]] && { PASS=$((PASS+1)); echo "ok   learned line is dated and stored"; } || { FAIL=$((FAIL+1)); echo "FAIL learned file: $(<"$UMB_USER_NOTES/127.0.0.1.md")"; }
+ok "note duplicate is not added" 0 'already noted for 127.0.0.1 (1 learned lines)' -- note 127.0.0.1 'click css:#plain, use when the page has no refs'
+[[ $(wc -l < "$UMB_USER_NOTES/127.0.0.1.md") -eq 1 ]] && { PASS=$((PASS+1)); echo "ok   duplicate left one line"; } || { FAIL=$((FAIL+1)); echo "FAIL duplicate added"; }
+ok "note over 300 chars refused" 1 'Keep it to one command line and when to use it' -- note 127.0.0.1 "$(python3 -c 'print("a" * 301)')"
+ok "note with a newline refused" 1 'one non-empty line' -- note 127.0.0.1 $'two\nlines'
+ok "note by tab id"            0 'noted for 127.0.0.1 (2 learned lines)' -- note $TAB 'second line via a tab id'
+ok "notes shows shipped, then learned" 0 'fixture notes:' -- notes 127.0.0.1
+[[ "$OUT" == *"fixture notes:"*"## Learned on this machine"*"second line via a tab id"* ]] && { PASS=$((PASS+1)); echo "ok   shipped comes before learned"; } || { FAIL=$((FAIL+1)); echo "FAIL order: $OUT"; }
+ok "note host is normalised"   0 'noted for learned.example (1 learned lines)' -- note LEARNED.Example 'only learned here'
+ok "notes lists a learned-only host" 0 'learned.example' -- notes
+ok "notes for a learned-only host" 0 'only learned here' -- notes learned.example
+UMB_NOTES="$TMPD/nonotes" ok "open prints notes line for a learned-only host" 0 'notes: umb notes 127.0.0.1' -- open "http://127.0.0.1:$PORT/fixture2.html"
+"$UMB" close "${OUT%% *}" >/dev/null 2>&1; CALLS=$((CALLS+1))
+mkdir -p "$UMB_USER_NOTES"; for i in {1..39}; do echo "- 2026-01-01 line $i"; done > "$UMB_USER_NOTES/many.example.md"
+ok "note at 40 lines: no warning" 0 '(40 learned lines)' -- note many.example 'line 40'
+absent "no warning at 40"      'merge or delete'
+ok "note at 41 lines warns"    0 'merge or delete stale ones in' -- note many.example 'line 41'
+[[ "$OUT" == *"$UMB_USER_NOTES/many.example.md"* ]] && { PASS=$((PASS+1)); echo "ok   warning gives the file path"; } || { FAIL=$((FAIL+1)); echo "FAIL warning path: $OUT"; }
+unset UMB_NOTES
+
 ok "link click navigates"     0 '(navigated)'                 -- click $TAB 'text:Go next'
 ok "snap after navigation"    0 'link "Back"'                 -- snap $TAB
 
@@ -208,16 +233,35 @@ ok "profiles lists a profile"    0 'Default' -- profiles
 ok "open with an unknown profile fails before opening" 1 'no profile "nope"' -- open "http://127.0.0.1:$PORT/fixture2.html" --profile nope
 ok "open option typo fails"      1 'unknown or incomplete open option' -- open "http://127.0.0.1:$PORT/fixture2.html" --profil Default
 
+# Close tip: after 12 umb commands on a host, once per host per day, not after a note, not with UMB_NO_TIPS=1.
+# Runs under its own UMB_TASK so the log-line count below stays exact.
+SAVE_TASK=$UMB_TASK; export UMB_TASK="smoke-tip-$$"
+tipround() {  # $1 = number of "umb text" calls between open and close; leaves close's output in $OUT; $2 = a note to add first
+  local o t i; sleep 1.2; o=$("$UMB" open "http://127.0.0.1:$PORT/fixture2.html"); t=${o%% *}
+  for i in {1..$1}; do "$UMB" text $t >/dev/null; done
+  [ -z "$2" ] || "$UMB" note $t "$2" >/dev/null
+  OUT=$("$UMB" close $t 2>&1); TIPRC=$?
+}
+TIP='tip: if something non-obvious worked on 127.0.0.1, save it for next time: umb note 127.0.0.1 "<one command line and when to use it>"'
+tipround 8;  [[ $TIPRC -eq 0 && "$OUT" == "closed "* && "$OUT" != *tip:* ]] && { PASS=$((PASS+1)); echo "ok   no tip below 12 commands"; } || { FAIL=$((FAIL+1)); echo "FAIL tip below 12: $OUT"; }
+tipround 11; [[ $TIPRC -eq 0 && "$OUT" == "closed "*$'\n'"$TIP" ]] && { PASS=$((PASS+1)); echo "ok   tip after 12 commands, close exit 0"; } || { FAIL=$((FAIL+1)); echo "FAIL tip at 12: $OUT"; }
+tipround 11; [[ $TIPRC -eq 0 && "$OUT" != *tip:* ]] && { PASS=$((PASS+1)); echo "ok   no second tip the same day"; } || { FAIL=$((FAIL+1)); echo "FAIL second tip: $OUT"; }
+rm -rf "$UMB_TIPS_DIR"
+tipround 11 'learned something'; [[ $TIPRC -eq 0 && "$OUT" != *tip:* ]] && { PASS=$((PASS+1)); echo "ok   no tip when a note was added"; } || { FAIL=$((FAIL+1)); echo "FAIL tip after note: $OUT"; }
+UMB_NO_TIPS=1 tipround 11; [[ $TIPRC -eq 0 && "$OUT" != *tip:* ]] && { PASS=$((PASS+1)); echo "ok   UMB_NO_TIPS=1 turns the tip off"; } || { FAIL=$((FAIL+1)); echo "FAIL UMB_NO_TIPS: $OUT"; }
+tipround 11; [[ "$OUT" == *"$TIP" ]] && { PASS=$((PASS+1)); echo "ok   tip still works once the stamp is clear"; } || { FAIL=$((FAIL+1)); echo "FAIL tip after NO_TIPS: $OUT"; }
+export UMB_TASK=$SAVE_TASK
+
 # Usage log: tagged lines, exit codes, failures counted, no URL paths or typed values.
 LOG=~/.local/state/umb/usage.jsonl
 MINE=$(grep -F "\"task\": \"$UMB_TASK\"" "$LOG")
 N=$(print -r -- "$MINE" | wc -l | tr -d ' ')
 FAILED=$(print -r -- "$MINE" | grep -c '"exit": [1-9]')
 echo "     log lines for this run: $N (failures: $FAILED)"
-[[ $N -eq $CALLS && $FAILED -eq 41 ]] && { PASS=$((PASS+1)); echo "ok   log has $N lines (one per call), $FAILED non-zero exits"; } || { FAIL=$((FAIL+1)); echo "FAIL log lines=$N failures=$FAILED (wanted $CALLS and 41)"; }
+[[ $N -eq $CALLS && $FAILED -eq 43 ]] && { PASS=$((PASS+1)); echo "ok   log has $N lines (one per call), $FAILED non-zero exits"; } || { FAIL=$((FAIL+1)); echo "FAIL log lines=$N failures=$FAILED (wanted $CALLS and 43)"; }
 OUT=$MINE; absent "log has no URL path" 'fixture.html'; absent "log has no typed value" 'hello world'; absent "log has no scheme" 'http'
 ok "cost totals"              0 "$UMB_TASK: " -- cost --task "$UMB_TASK"
-ok "cost counts failures"     0 ', 41 failures,' -- cost --task "$UMB_TASK"
+ok "cost counts failures"     0 ', 43 failures,' -- cost --task "$UMB_TASK"
 
 echo "$PASS passed, $FAIL failed"
 [ $FAIL -eq 0 ]
