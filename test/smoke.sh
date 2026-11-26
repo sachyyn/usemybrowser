@@ -154,16 +154,70 @@ unset UMB_NOTES
 ok "link click navigates"     0 '(navigated)'                 -- click $TAB 'text:Go next'
 ok "snap after navigation"    0 'link "Back"'                 -- snap $TAB
 
+# Tab ownership: a tab opened with the daemon directly (not umb open) is "the user's". Reads work, actions are refused.
+CDT="$HOME/.local/share/helium-cdt/node_modules/.bin/chrome-devtools"
+FIX=$("$CDT" new_page "http://127.0.0.1:$PORT/fixture2.html" --background --output-format json 2>/dev/null | python3 -c 'import json,sys; print(max(p["id"] for p in json.load(sys.stdin)["pages"]))')
+[[ "$FIX" == <-> ]] || { echo "FAIL could not open the non-owned fixture tab"; exit 1; }
+cleanup() { [ -n "$TAB" ] && "$UMB" close "$TAB" >/dev/null 2>&1; [ -n "$FIX" ] && "$CDT" close_page "$FIX" >/dev/null 2>&1; kill $SRV 2>/dev/null; rm -rf "$TMPD"; }
+NOT="tab $FIX was not opened by umb; reads are allowed, actions need: umb lend $FIX"
+ok "not owned: click refused"    1 "$NOT" -- click $FIX 'css:#plain'
+ok "not owned: fill refused"     1 "$NOT" -- fill $FIX 'css:#name' x
+ok "not owned: keys refused"     1 "$NOT" -- keys $FIX 'key:Tab'
+ok "not owned: run refused"      1 "$NOT" -- run $FIX - <<<'return 1'
+ok "not owned: recipe --tab refused" 1 "$NOT" -- recipe fixture-echo "{\"port\":$PORT}" --tab $FIX
+ok "not owned: close refused"    1 "$NOT" -- close $FIX
+ok "not owned: close_page refused" 1 "$NOT" -- close_page $FIX
+ok "not owned: evaluate_script refused" 1 "$NOT" -- evaluate_script --pageId $FIX '() => 1'
+ok "not owned: navigate_page refused" 1 "$NOT" -- navigate_page $FIX --url about:blank
+ok "not owned: press_key refused" 1 "$NOT" -- press_key $FIX Tab
+ok "not owned: type_text refused" 1 "$NOT" -- type_text $FIX abc
+ok "not owned: select_page refused" 1 "$NOT" -- select_page $FIX
+ok "new_page points to open"     1 'use: umb open' -- new_page about:blank
+ok "pass-through with no tab id refused" 1 'changes a tab' -- hover
+ok "not owned: snap works"       0 'link "Back"' -- snap $FIX
+ok "not owned: text works"       0 'Second page' -- text $FIX
+ok "not owned: take_snapshot works" 0 'Back' -- take_snapshot $FIX
+ok "not owned: list_pages works" 0 "$FIX:" -- list_pages
+ok "not owned: tabs lists it"    0 "$FIX \"" -- tabs
+[[ "$OUT" != *"$FIX "*" +"* && "$OUT" != *"$FIX "*" ~"* ]] && { PASS=$((PASS+1)); echo "ok   not owned: no mark on the user's tab"; } || { FAIL=$((FAIL+1)); echo "FAIL mark on user's tab"; }
+[[ "$OUT" == *"$TAB \""*"\" 127.0.0.1 +"* ]] && { PASS=$((PASS+1)); echo "ok   tabs marks the tab umb opened with +"; } || { FAIL=$((FAIL+1)); echo "FAIL + mark: $OUT"; }
+# An old record from another daemon run (or a reused id) is ignored and dropped.
+print -r -- "1 0" > "$HOME/.cache/umb/tabs/own-$FIX"
+ok "stale record from another daemon is ignored" 1 "$NOT" -- click $FIX 'css:#plain'
+ok "stale record is dropped by tabs" 0 "$FIX" -- tabs
+[ ! -e "$HOME/.cache/umb/tabs/own-$FIX" ] && { PASS=$((PASS+1)); echo "ok   stale record file removed"; } || { FAIL=$((FAIL+1)); echo "FAIL stale record kept"; }
+ok "lend"                        0 "lent $FIX" -- lend $FIX
+ok "lent: tabs marks with ~"     0 "$FIX \"" -- tabs
+[[ "$OUT" == *"$FIX "*" ~"* ]] && { PASS=$((PASS+1)); echo "ok   lent tab is marked ~"; } || { FAIL=$((FAIL+1)); echo "FAIL ~ mark: $OUT"; }
+ok "lent: run works"             0 'url unchanged' -- run $FIX - <<<'return 1'
+ok "lent: pass-through works"    0 '1' -- evaluate_script --pageId $FIX '() => 1'
+ok "lent: close refused without --force" 1 'closing it needs: umb close' -- close $FIX
+ok "unlend"                      0 "unlent $FIX" -- unlend $FIX
+ok "unlent: refused again"       1 "$NOT" -- run $FIX - <<<'return 1'
+ok "lend a tab that does not exist fails" 1 'no tab' -- lend 999999
+ok "close: junk id fails"        1 'usage: umb close' -- close abc
+ok "close: empty id fails"       1 'usage: umb close' -- close
+ok "close: negative id fails"    1 'usage: umb close' -- close -1
+ok "close: id with trailing text fails" 1 'usage: umb close' -- close "${TAB}x"
+ok "close: extra argument fails" 1 'usage: umb close' -- close $TAB extra
+ok "owned tab still open after junk closes" 0 "$TAB \"" -- tabs
+ok "lend again, then close --force" 0 "lent $FIX" -- lend $FIX
+ok "lent: close --force works"   0 "closed $FIX" -- close $FIX --force
+FIX=""
+ok "profiles lists a profile"    0 'Default' -- profiles
+ok "open with an unknown profile fails before opening" 1 'no profile "nope"' -- open "http://127.0.0.1:$PORT/fixture2.html" --profile nope
+ok "open option typo fails"      1 'unknown or incomplete open option' -- open "http://127.0.0.1:$PORT/fixture2.html" --profil Default
+
 # Usage log: tagged lines, exit codes, failures counted, no URL paths or typed values.
 LOG=~/.local/state/umb/usage.jsonl
 MINE=$(grep -F "\"task\": \"$UMB_TASK\"" "$LOG")
 N=$(print -r -- "$MINE" | wc -l | tr -d ' ')
 FAILED=$(print -r -- "$MINE" | grep -c '"exit": [1-9]')
 echo "     log lines for this run: $N (failures: $FAILED)"
-[[ $N -eq $CALLS && $FAILED -eq 16 ]] && { PASS=$((PASS+1)); echo "ok   log has $N lines (one per call), $FAILED non-zero exits"; } || { FAIL=$((FAIL+1)); echo "FAIL log lines=$N failures=$FAILED (wanted $CALLS and 16)"; }
+[[ $N -eq $CALLS && $FAILED -eq 41 ]] && { PASS=$((PASS+1)); echo "ok   log has $N lines (one per call), $FAILED non-zero exits"; } || { FAIL=$((FAIL+1)); echo "FAIL log lines=$N failures=$FAILED (wanted $CALLS and 41)"; }
 OUT=$MINE; absent "log has no URL path" 'fixture.html'; absent "log has no typed value" 'hello world'; absent "log has no scheme" 'http'
 ok "cost totals"              0 "$UMB_TASK: " -- cost --task "$UMB_TASK"
-ok "cost counts failures"     0 ', 16 failures,' -- cost --task "$UMB_TASK"
+ok "cost counts failures"     0 ', 41 failures,' -- cost --task "$UMB_TASK"
 
 echo "$PASS passed, $FAIL failed"
 [ $FAIL -eq 0 ]

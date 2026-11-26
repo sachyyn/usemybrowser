@@ -57,9 +57,26 @@ case "$1" in
     echo "       umb run <tab> <file.js | -> [json args] [--max n]   (script body; scope: args, umb.find/click/fill/wait/sleep/text)"
     echo "       umb recipe [name [json args] [--tab id]]   (--tab runs it in that open tab; sheets-* recipes need it)"
     echo "       umb notes [host|tab]   proven idioms for a site (no argument: hosts that have notes); umb open prints a notes: line when there are some"
-    echo "       umb open <url> | tabs | close <tab> | text <tab> [css] [max] | check <tab> \"question\""
+    echo "       umb open <url> [--profile <folder|name>]   UMB_PROFILE sets the default profile; --profile opens through the browser's own"
+    echo "         launcher (open -g), which can bring that profile's window forward; without one, the tab goes to the active window"
+    echo "       umb profiles   profile folders and names; the default for open is marked"
+    echo "       umb tabs | close <tab> [--force] | lend <tab> | unlend <tab> | text <tab> [css] [max] | check <tab> \"question\""
+    echo "       Tab safety: click, fill, keys, run, recipe --tab, close and every pass-through that can change a tab work only on tabs"
+    echo "         umb opened (+ in umb tabs) or you lent (~). Reads (tabs snap text look shot check wait notes take_* list_* get_*) work on any tab."
+    echo "         A lent tab can be acted on but close needs --force. Popups from an acted-on tab become umb's."
     echo "       umb <other chrome-devtools command>   (a relative --filePath is made absolute from your folder)"; exit 0 ;;
 esac
+
+# umb profiles: folder, name, and tags. No daemon needed.
+if [[ "$1" == profiles ]]; then
+  want=; [ -z "$UMB_PROFILE" ] || want=$(python3 "$ROOT/lib/profiles.py" "$UMB_DIR" resolve "$UMB_PROFILE" | head -1) || exit 1
+  python3 "$ROOT/lib/profiles.py" "$UMB_DIR" list | while IFS=$'\t' read -r f n fl; do
+    tags=(); [[ $f == "$want" ]] && tags+=(default); [[ -z $want && $fl == *last-used* ]] && tags+=("default: browser's last used")
+    [[ $fl == *active* ]] && tags+=("window open")
+    printf '%-10s %-24s %s\n' "$f" "\"$n\"" "${(j:, :)tags}"
+  done
+  exit 0
+fi
 
 # Site notes: one Markdown file per host in $UMB_NOTES (default: notes/ in the repo).
 NOTES_DIR=${UMB_NOTES:-$ROOT/notes}
@@ -90,6 +107,39 @@ fi
 
 pages() { cdt list_pages --output-format json; }
 need_tab() { [[ "$1" == <-> ]] || die "usage: umb $CMD <tab id> ... (ids from: umb tabs)"; }
+
+# Tab ownership (lib/own.py): own-<id> = umb opened it, lend-<id> = the user lent it. Records carry the daemon's pid;
+# the browser's tab ids are never reused within one daemon run, so a record from another daemon run is ignored.
+OWN="$CACHE/tabs"; mkdir -p "$OWN"
+DPID=$(<"$PIDF" 2>/dev/null) || die "no daemon pid file; run: umb start"
+has_record() { [[ -f "$OWN/$1-$2" && "$(cut -d' ' -f1 < "$OWN/$1-$2")" == "$DPID" ]]; }
+record() { print -r -- "$DPID $EPOCHSECONDS" > "$OWN/$1-$2"; }
+own_py() { python3 "$ROOT/lib/own.py" "$OWN" "$DPID" "$@"; }
+refuse() { die "tab $1 was not opened by umb; reads are allowed, actions need: umb lend $1"; }
+need_act() { need_tab "$1"; has_record own "$1" || has_record lend "$1" || refuse "$1"; }
+adopt() { print -r -- "$2" | own_py adopt "$1"; }  # $1=pages before, $2=pages after: new tabs are umb's (popups)
+
+# Pass-through commands: reads need no tab ownership; everything else (and anything unknown) must name an owned or lent tab.
+# Read-only: list_*, get_*, take_snapshot, take_screenshot, performance_stop_trace, performance_analyze_insight, and the
+# heap snapshot file readers. Acting: click_at drag emulate evaluate_script fill handle_dialog hover navigate_page press_key
+# resize_page select_page type_text upload_file close_page take_heapsnapshot lighthouse_audit performance_start_trace
+# screencast_* set_logpoints mock_network remove_network_mock configure_webauthn execute_* *_extension trigger_extension_action
+# *_pwa (the last group names no tab, so umb refuses them). new_page is refused: use umb open.
+gate_passthrough() {  # $1=command, rest = its args. Sets ACTING=1 when the command may change a tab.
+  local id= i a; ACTING=
+  case $1 in
+    list_*|get_*|take_snapshot|take_screenshot|performance_stop_trace|performance_analyze_insight|analyze_heapsnapshot_contexts|compare_heapsnapshots|close_heapsnapshot|query_heapsnapshot_objects) return 0 ;;
+    new_page) die "new_page makes a tab umb does not track; use: umb open <url>" ;;
+  esac
+  for a in "${@:2}"; do [[ $a == --help || $a == -h ]] && return 0; done
+  [[ $2 == <-> ]] && id=$2
+  for ((i = 2; i <= $#; i++)); do
+    [[ ${@[i]} == --pageId ]] && id=${@[i+1]}
+    [[ ${@[i]} == --pageId=* ]] && id=${@[i]#--pageId=}
+  done
+  [[ -n $id ]] || die "$1 changes a tab; name one that umb opened or you lent (umb lend <id>)"
+  need_act "$id"; ACTING=1
+}
 
 # Run one page operation. Prints its result; exits 1 with the page's error on stderr.
 # $1=tab $2=op, rest=args. Sets PAGE_RC to 2 when a wait condition is not met yet.
@@ -141,7 +191,7 @@ act() {  # click|fill|run: run the op, report what changed, then check the proof
   fi
   [[ $2 == run ]] && sep=$'\n'
   [ -n "$navigated" ] && sleep 0.4  # a normal action already waited; only a navigation needs time to land
-  after=$(pages)
+  after=$(pages); adopt "$before" "$after"
   print -r -- "$out$sep$(what_changed "$tab" "$before" "$after")"
   proof "$tab" || exit 1
 }
@@ -229,24 +279,52 @@ keys() {
     esac
     [ -z "$ERR" ] || die "keys failed at step $n of $total (${step:0:40}): ${ERR:0:300}"
   done
-  after=$(pages)
+  after=$(pages); adopt "$before" "$after"
   print -r -- "keys: $total steps ok; $(what_changed "$tab" "$before" "$after")"
   proof "$tab" || exit 1
 }
 
 open_tab() {  # prints: <id> "<title>" <url>
   [ -n "$1" ] || die "usage: umb open <url>"
-  cdt new_page "$1" --background --output-format json | python3 -c '
+  local raw=$(cdt new_page "$1" --background --output-format json) line
+  line=$(print -r -- "$raw" | python3 -c '
 import json, sys
 raw = sys.stdin.read()
 try: p = max(json.loads(raw)["pages"], key=lambda p: p["id"])
 except Exception: sys.exit("umb: could not open the page: " + raw[:300])
-print("%d \"%s\" %s" % (p["id"], p["title"], p["url"]))'
+print("%d \"%s\" %s" % (p["id"], p["title"], p["url"]))') || { print -r -- "$line"; return 1; }
+  record own "${line%% *}"; print -r -- "$raw" | own_py prune; print -r -- "$line"
+}
+
+# Open <url> in a named profile through the browser's own launcher, then find the new tab in list_pages (the daemon
+# reports no window or profile). $1=url $2=profile folder. Prints the same line as open_tab.
+open_in_profile() {
+  local url=$1 dir=$2 app=${UMB_APP:-Helium} before after id line
+  [[ -n ${UMB_APP:-} || $UMB_DIR != *net.imput.helium* && $UMB_DIR == *Chrome* ]] && app=${UMB_APP:-Google Chrome}
+  before=$(pages)
+  open -g -na "$app" --args --profile-directory="$dir" "$url" || die "could not launch $app"
+  for i in {1..40}; do
+    sleep 0.25; after=$(pages)
+    id=$(python3 -c '
+import json, sys
+b = {p["id"] for p in json.loads(sys.argv[1])["pages"]}
+new = [p for p in json.loads(sys.argv[2])["pages"] if p["id"] not in b]
+want = sys.argv[3].rstrip("/")
+hit = [p for p in new if p["url"].rstrip("/") == want] or ([] if len(new) != 1 else new)
+if len(hit) == 1: print(hit[0]["id"])' "$before" "$after" "$url")
+    [ -n "$id" ] && break
+  done
+  [ -n "$id" ] || die "asked $app for a tab in $dir, but could not find it in the tab list after 10 s; umb does not track it"
+  record own "$id"; print -r -- "$after" | own_py prune
+  print -r -- "$after" | python3 -c '
+import json, sys
+p = next(p for p in json.load(sys.stdin)["pages"] if p["id"] == int(sys.argv[1]))
+print("%d \"%s\" %s" % (p["id"], p["title"], p["url"]))' "$id"
 }
 close_tab() {
   local out=$(cdt close_page "$1" --output-format json)
   [[ "$out" == *'"Error'* ]] && die "could not close tab $1: ${out:0:200}"
-  rm -f "$CACHE/state-$1.json" "$CACHE/script-$1.js" "$CACHE/body-$1.js"; echo "closed $1"
+  rm -f "$OWN/own-$1" "$OWN/lend-$1" "$CACHE/state-$1.json" "$CACHE/script-$1.js" "$CACHE/body-$1.js"; echo "closed $1"
 }
 
 # umb shot <tab> [--region <target>] [--max-px n] [--quality n] [--out path]: a small JPEG of the viewport, or of one
@@ -305,7 +383,7 @@ recipe() {
   fi
   [[ "$name" =~ '^[a-z0-9-]+$' ]] && files=("${UMB_RECIPES:-$ROOT/recipes}"/$name.(js|sh)(N)) && f=${files[1]} || true
   [ -n "$f" ] || die "no recipe \"$name\"; list them with: umb recipe"
-  [[ "$3" == --tab ]] && { need_tab "$4"; tab=$4; }
+  [[ "$3" == --tab ]] && { need_act "$4"; tab=$4; }
   if [[ "$f" == *.sh ]]; then env -u UMB_INNER UMB="$ROOT/bin/umb" UMB_TAB=$tab "$f" "$json"; rc=$?; [ $rc -eq 0 -a -n "$tab" ] && { proof "$tab" || rc=1; }; return $rc; fi
   [ -n "$tab" ] || {
     url=$(python3 -c '
@@ -329,8 +407,8 @@ print(re.sub(r"\{(\w+)(?:\|([^}]*))?\}", sub, m[1]))' "$f" "$json") || exit 1
 CMD=$1
 case "$CMD" in
   snap) need_tab "$2"; page_op "$2" snap "${@:3}" ;;
-  click|fill) need_tab "$2"; split_proof "${@:3}"; act "$2" "$CMD" "${REST[@]}" ;;
-  keys) need_tab "$2"; split_proof "${@:3}"; keys "$2" "${REST[@]}" ;;
+  click|fill) need_act "$2"; split_proof "${@:3}"; act "$2" "$CMD" "${REST[@]}" ;;
+  keys) need_act "$2"; split_proof "${@:3}"; keys "$2" "${REST[@]}" ;;
   wait)
     need_tab "$2"; tab=$2; shift 2
     ms=10000
@@ -341,23 +419,39 @@ case "$CMD" in
     [ $rc -eq 2 ] && die "wait timed out after ${ms}ms: $WAIT_OUT"
     exit 1 ;;
   open)
-    out=$(open_tab "$2") || exit 1; echo "$out"
-    h=$(site_host "$2"); [[ "$h" =~ '^[A-Za-z0-9.-]+$' && -f "$NOTES_DIR/$h.md" ]] && echo "notes: umb notes $h"; exit 0 ;;
+    url=$2; shift 2; prof=${UMB_PROFILE:-}
+    while (( $# )); do
+      [[ $1 == --profile && -n $2 ]] && { prof=$2; shift 2; } || die "unknown or incomplete open option: $1"
+    done
+    [ -n "$url" ] || die "usage: umb open <url> [--profile <folder|name>]"
+    if [ -n "$prof" ]; then
+      r=$(python3 "$ROOT/lib/profiles.py" "$UMB_DIR" resolve "$prof") || exit 1
+      out=$(open_in_profile "$url" "${${(f)r}[1]}") || exit 1; echo "$out"; echo "profile: ${${(f)r}[1]} (${${(f)r}[2]})"
+    else
+      out=$(open_tab "$url") || exit 1; echo "$out"
+      (( $(python3 "$ROOT/lib/profiles.py" "$UMB_DIR" active-count) > 1 )) && echo "profile: unknown (set UMB_PROFILE or pass --profile to choose)"
+    fi
+    h=$(site_host "$url"); [[ "$h" =~ '^[A-Za-z0-9.-]+$' && -f "$NOTES_DIR/$h.md" ]] && echo "notes: umb notes $h"; exit 0 ;;
   notes)  # umb notes <tab id>
     h=$(site_host "$(pages | python3 -c '
 import json, sys
 t = sys.argv[1]
 print(next((p["url"] for p in json.load(sys.stdin)["pages"] if str(p["id"]) == t), ""))' "$2")")
     [ -n "$h" ] || die "no tab $2"; show_notes "$h" ;;
-  tabs)
-    pages | python3 -c '
-import json, sys
-from urllib.parse import urlparse
-for p in json.load(sys.stdin)["pages"]:
-    print("%d \"%s\" %s" % (p["id"], p["title"][:40], urlparse(p["url"]).hostname or p["url"][:30]))' ;;
-  close) need_tab "$2"; close_tab "$2" ;;
+  tabs) pages | own_py tabs ;;
+  lend)
+    need_tab "$2"; listing=$(pages | own_py tabs); [[ $'\n'$listing == *$'\n'"$2 "* ]] || die "no tab $2"
+    has_record own "$2" && { echo "tab $2 is already umb's"; exit 0; }
+    record lend "$2"; echo "lent $2: umb may act on it; close still needs --force" ;;
+  unlend) need_tab "$2"; rm -f "$OWN/lend-$2"; echo "unlent $2" ;;
+  close|close_page)  # the id is checked before anything else runs
+    need_tab "$2"; [[ -z $3 || $3 == --force && $# -eq 3 ]] || die "usage: umb close <tab> [--force]"
+    if has_record own "$2"; then :
+    elif has_record lend "$2"; then [[ $3 == --force ]] || die "tab $2 was lent, not opened by umb; closing it needs: umb close $2 --force"
+    else refuse "$2"; fi
+    close_tab "$2" ;;
   run)  # umb run <tab> <file.js | -> [json args] [--max n]
-    need_tab "$2"; split_proof "${@:3}"; set -- "$1" "$2" "${REST[@]}"; [ -n "$3" ] || die "usage: umb run <tab> <file.js | -> [json args] [--max n]"
+    need_act "$2"; split_proof "${@:3}"; set -- "$1" "$2" "${REST[@]}"; [ -n "$3" ] || die "usage: umb run <tab> <file.js | -> [json args] [--max n]"
     if [[ "$3" == - ]]; then BODY="$CACHE/body-$2.js"; cat > "$BODY"; else BODY=$3; [ -f "$BODY" ] || die "no such file: $3"; fi
     act "$2" run "${@:4}" ;;
   recipe) shift; split_proof "$@"; recipe "${REST[@]}" ;;
@@ -373,16 +467,18 @@ for p in json.load(sys.stdin)["pages"]:
   text)  # umb text <tab> [css selector] [max chars]: readable text of one part of the page
     need_tab "$2"; page_op "$2" text "${@:3}" ;;
   evaluate_script)  # pass-through, minus the "Script ran on page and returned" wrapper
+    gate_passthrough "$@"
     cdt "$@" | sed -e '/^Script ran on page and returned:$/d' -e '/^```json$/d' -e '/^```$/d' ;;
   press_key)  # one short line instead of the daemon's echo
-    need_tab "$2"; send "$2" key "$3" && echo "pressed $3" || die "press_key failed: $ERR" ;;
+    need_act "$2"; send "$2" key "$3" && echo "pressed $3" || die "press_key failed: $ERR" ;;
   type_text)
-    need_tab "$2"; send "$2" text "$3" && echo "typed ${#3} chars" || die "type_text failed: $ERR" ;;
+    need_act "$2"; send "$2" text "$3" && echo "typed ${#3} chars" || die "type_text failed: $ERR" ;;
   *)  # any other chrome-devtools command; a relative --filePath is resolved here, not in the daemon's folder
-    args=()
+    gate_passthrough "$@"; args=()
     for a in "$@"; do
       [[ "${args[-1]:-}" == --filePath && "$a" != /* ]] && a=$PWD/$a
       args+=("$a")
     done
+    if [ -n "$ACTING" ]; then before=$(pages); cdt "${args[@]}"; rc=$?; adopt "$before" "$(pages)"; exit $rc; fi
     cdt "${args[@]}" ;;
 esac
