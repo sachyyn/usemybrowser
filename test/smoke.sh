@@ -59,6 +59,12 @@ ok "fill select bad option"   1 'has no option'               -- fill $TAB $REF_
 ok "checkbox already checked" 0 'already checked; left alone' -- fill $TAB $REF_BOX true
 ok "checkbox uncheck"         0 'now unchecked'               -- fill $TAB $REF_BOX false
 ok "checkbox no toggle"       0 'already unchecked; left alone' -- fill $TAB $REF_BOX false
+ok "fill: a value that looks like a flag is kept" 0 'filled' -- fill $TAB 'css:#name' --max
+ok "fill: flag value landed"  0 '"--max"'                     -- evaluate_script --pageId $TAB '() => document.getElementById("name").value'
+ok "fill: --force as the value" 0 'filled'                    -- fill $TAB $REF_NAME --force
+ok "fill: --force value landed" 0 '"--force"'                 -- evaluate_script --pageId $TAB '() => document.getElementById("name").value'
+ok "fill: proof flags after the value still work" 0 'expect ok' -- fill $TAB 'css:#name' hello --expect 'Fixture' --timeout 2000
+ok "fill: missing value fails" 1 'usage: umb fill'            -- fill $TAB 'css:#name'
 
 ok "wait timeout fails"       1 'wait timed out after 800ms: text "Never" is not on the page' -- wait $TAB --text Never --timeout 800
 ok "wait gone"                0 ok                            -- wait $TAB --gone Never
@@ -118,6 +124,8 @@ ok "read-max caps"            0 '-- cut at 5 of 13 chars'     -- click $TAB css:
 ok "fill takes proof flags"   0 'expect ok'                   -- fill $TAB 'css:#name' hello --expect 'plain clicked'
 ok "recipe --tab runs in an open tab" 0 '"name":"recipe","log":"span clicked"' -- recipe fixture-echo "{\"port\":$PORT}" --tab $TAB
 ok "recipe --tab proof"       0 'expect ok'                   -- recipe fixture-echo "{\"port\":$PORT}" --tab $TAB --expect 'span clicked'
+ok "recipe --tab with no JSON args" 0 '"name":"recipe","log":"span clicked"' -- recipe fixture-echo --tab $TAB
+ok "recipe --tab first, JSON after" 0 '"name":"jsonlast"' -- recipe fixture-echo --tab $TAB '{"name":"jsonlast"}'
 
 # shot: a small JPEG at an absolute path; a region crop is smaller than the viewport.
 px() { sips -g pixelWidth -g pixelHeight "$1" | awk '/pixel/ {print $2}' | tr '\n' ' '; }
@@ -199,6 +207,13 @@ ok "not owned: type_text refused" 1 "$NOT" -- type_text $FIX abc
 ok "not owned: select_page refused" 1 "$NOT" -- select_page $FIX
 ok "new_page points to open"     1 'use: umb open' -- new_page about:blank
 ok "pass-through with no tab id refused" 1 'changes a tab' -- hover
+
+# One tab id per command: the positional id and every --pageId must be the same tab (refused before the browser is reached).
+DIFF="names different tabs"
+ok "ids: positional not owned, --pageId owned" 1 "$DIFF" -- navigate_page $FIX --pageId $TAB --url about:blank
+ok "ids: --pageId owned, then --pageId not owned" 1 "$DIFF" -- navigate_page --pageId $TAB --pageId $FIX --url about:blank
+ok "ids: --pageId= forms differ" 1 "$DIFF" -- navigate_page --pageId=$FIX --pageId=$TAB --url about:blank
+ok "ids: a single not-owned --pageId= is refused" 1 "$NOT" -- navigate_page --pageId=$FIX --url about:blank
 ok "not owned: snap works"       0 'link "Back"' -- snap $FIX
 ok "not owned: text works"       0 'Second page' -- text $FIX
 ok "not owned: take_snapshot works" 0 'Back' -- take_snapshot $FIX
@@ -229,6 +244,82 @@ ok "owned tab still open after junk closes" 0 "$TAB \"" -- tabs
 ok "lend again, then close --force" 0 "lent $FIX" -- lend $FIX
 ok "lent: close --force works"   0 "closed $FIX" -- close $FIX --force
 FIX=""
+
+# URLs: only http(s), file and about:blank open; a flag or a script URL is refused before anything is opened.
+tabcount() { "$UMB" tabs | wc -l | tr -d ' '; }  # runs in a subshell: the two calls are added to CALLS by hand
+N0=$(tabcount); CALLS=$((CALLS+2))
+ok "open refuses a debugging flag"   1 'not a url: --remote-debugging-port=9222' -- open --remote-debugging-port=9222
+ok "open refuses a flag with --profile" 1 'not a url: --load-extension=/tmp/x' -- open --load-extension=/tmp/x --profile Default
+ok "open refuses a javascript: url"  1 'not a url: javascript:alert(1)' -- open 'javascript:alert(1)'
+ok "recipe // url: refuses a flag"   1 'not a url: --load-extension' -- recipe fixture-badurl '{"u":"--load-extension"}'
+[[ "$(tabcount)" == "$N0" ]] && { PASS=$((PASS+1)); echo "ok   refused opens left the tab count at $N0"; } || { FAIL=$((FAIL+1)); echo "FAIL tab count changed"; }
+
+# open --profile adopts only a new tab on the asked-for host (lib/newtab.py; no profile window is opened here).
+pick() { python3 "$ROOT_DIR/lib/newtab.py" "$1" "$2" "$3"; }
+ROOT_DIR=${HERE:h}
+B='{"pages":[{"id":1,"url":"https://mail.google.com/"}]}'
+expect_pick() { local got; got=$(pick "$2" "$3" "$4"); [[ "$got" == "$5" ]] && { PASS=$((PASS+1)); echo "ok   $1"; } || { FAIL=$((FAIL+1)); echo "FAIL $1 (got '$got', wanted '$5')"; }; }
+expect_pick "profile adopt: same host, http asked, https landed" http://example.com/a "$B" '{"pages":[{"id":1,"url":"https://mail.google.com/"},{"id":7,"url":"https://example.com/a"}]}' 7
+expect_pick "profile adopt: the user's own new tab on another host is not adopted" https://example.com/ "$B" '{"pages":[{"id":1,"url":"https://mail.google.com/"},{"id":8,"url":"https://news.example.org/"}]}' ""
+expect_pick "profile adopt: only the matching one of two new tabs" https://example.com/ "$B" '{"pages":[{"id":1,"url":"https://mail.google.com/"},{"id":8,"url":"https://news.example.org/"},{"id":9,"url":"https://example.com/x"}]}' 9
+expect_pick "profile adopt: two new tabs on the host is ambiguous" https://example.com/ "$B" '{"pages":[{"id":1,"url":"https://mail.google.com/"},{"id":8,"url":"https://example.com/a"},{"id":9,"url":"https://example.com/b"}]}' ""
+expect_pick "profile adopt: exact url wins between two on the host" https://example.com/a "$B" '{"pages":[{"id":1,"url":"https://mail.google.com/"},{"id":8,"url":"https://example.com/a"},{"id":9,"url":"https://example.com/b"}]}' 8
+expect_pick "profile adopt: about:blank matches exactly" about:blank "$B" '{"pages":[{"id":1,"url":"https://mail.google.com/"},{"id":8,"url":"about:blank"}]}' 8
+expect_pick "profile adopt: about:blank does not take a real tab" about:blank "$B" '{"pages":[{"id":1,"url":"https://mail.google.com/"},{"id":8,"url":"https://example.com/"}]}' ""
+expect_pick "profile adopt: an old tab is never adopted" https://mail.google.com/ "$B" "$B" ""
+
+# check validates its tab id (and calls the repo's own decide).
+ok "check: junk tab id refused" 1 'usage: umb check <tab id>' -- check abc "is it?"
+grep -q '^ *exec decide\|[^/]decide -q' "$UMB" && { FAIL=$((FAIL+1)); echo "FAIL check still runs decide from PATH"; } || { PASS=$((PASS+1)); echo "ok   check calls the repo's own bin/decide"; }
+
+# Concurrent calls on one tab use their own script files and leave none behind.
+( "$UMB" run $TAB - <<<'await umb.sleep(900); return "AAA"' > "$TMPD/c1" 2>&1 ) & C1=$!
+( "$UMB" run $TAB - <<<'return "BBB"' > "$TMPD/c2" 2>&1 ) & C2=$!
+wait $C1 $C2; CALLS=$((CALLS+2))
+[[ "$(<$TMPD/c1)" == AAA* && "$(<$TMPD/c2)" == BBB* ]] && { PASS=$((PASS+1)); echo "ok   two concurrent runs on one tab each ran their own script"; } || { FAIL=$((FAIL+1)); echo "FAIL concurrent: $(<$TMPD/c1) / $(<$TMPD/c2)"; }
+LEFT=$(print -l ~/.cache/umb/(script|body|check).*(N)); LEFT=${#${(f)LEFT}}
+[[ $LEFT -eq 0 ]] && { PASS=$((PASS+1)); echo "ok   no script or body temp files left"; } || { FAIL=$((FAIL+1)); echo "FAIL $LEFT temp files left"; }
+
+# Ctrl-C: an interrupted umb call (SIGINT to its whole process group) leaves no temp file in its TMPDIR or the cache.
+mkdir -p "$TMPD/tmp"
+TMPDIR="$TMPD/tmp" python3 -c '
+import os, signal, subprocess, sys, time
+p = subprocess.Popen([sys.argv[1], "wait", sys.argv[2], "--text", "Never", "--timeout", "8000"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True, env={**os.environ, "UMB_NO_LOG": "1"})
+time.sleep(1.2); os.killpg(p.pid, signal.SIGINT); p.wait()' "$UMB" $TAB
+LEFT=$(print -l "$TMPD"/tmp/*(N) ~/.cache/umb/script.*(N)); LEFT=${#${(f)LEFT}}
+[[ $LEFT -eq 0 ]] && { PASS=$((PASS+1)); echo "ok   Ctrl-C leaves no temp files (wrapper output, page script)"; } || { FAIL=$((FAIL+1)); echo "FAIL Ctrl-C left $LEFT files: $(ls "$TMPD/tmp")"; }
+
+# A refused close keeps the tab's host record (the log still resolves the host); a real close removes it.
+UMB_NO_TIPS=1 ok "open a tab for the close test" 0 '127.0.0.1' -- open "http://127.0.0.1:$PORT/fixture2.html"; CT=${OUT%% *}
+ok "refused close (extra argument)" 1 'usage: umb close' -- close $CT extra
+[[ -f ~/.cache/umb/tabs/host-$CT ]] && { PASS=$((PASS+1)); echo "ok   host record kept after a refused close"; } || { FAIL=$((FAIL+1)); echo "FAIL host record deleted by a refused close"; }
+UMB_NOTES="$HERE/notes" ok "notes by tab id still resolve after a refused close" 0 'fixture notes:' -- notes $CT
+UMB_NO_TIPS=1 ok "real close" 0 "closed $CT" -- close $CT
+[[ ! -f ~/.cache/umb/tabs/host-$CT ]] && { PASS=$((PASS+1)); echo "ok   host record removed after a real close"; } || { FAIL=$((FAIL+1)); echo "FAIL host record kept after close"; }
+
+# The folder check is exact: a folder that only contains the real one as a prefix is a different folder.
+rm -f ~/.cache/umb/daemon-ok
+USEMYBROWSER_DIR="${HOME}/Library/Application Support/net.imput.heliu" ok "different folder (prefix of the real one) refused" 1 'different browser folder' -- tabs
+ok "the real folder passes the exact check" 0 "$TAB" -- tabs
+
+# Recipes' shell glue: shop-search refuses a limit that is not a number before opening anything; decide trims errors and the log.
+ok_direct() { local name=$1 want=$2; shift 2; OUT=$("$@" 2>&1); [[ "$OUT" == *"$want"* ]] && { PASS=$((PASS+1)); echo "ok   $name"; } || { FAIL=$((FAIL+1)); echo "FAIL $name: $OUT"; }; }
+ok_direct "shop-search: a limit that is not a number is refused" 'limit must be a number' "${HERE:h}/recipes/shop-search.sh" '{"query":"x","limit":"3,\"sites\":1"}'
+HOME_SAVE=$HOME; mkdir -p "$TMPD/h"
+HOME="$TMPD/h" GEMINI_API_KEY=SECRETKEY123 python3 - "${HERE:h}/bin/decide" <<'PY' && { PASS=$((PASS+1)); echo "ok   decide: HTTP error shows code and a short message, no key; log stores the question length"; } || { FAIL=$((FAIL+1)); echo "FAIL decide error trimming"; }
+import importlib.machinery, importlib.util, io, json, sys, urllib.error, urllib.request, os
+loader = importlib.machinery.SourceFileLoader("decide", sys.argv[1]); spec = importlib.util.spec_from_loader("decide", loader)
+d = importlib.util.module_from_spec(spec); loader.exec_module(d)
+body = json.dumps({"error": {"message": "bad SECRETKEY123 " + "x" * 500}}).encode()
+def boom(req, timeout=0): raise urllib.error.HTTPError("u", 400, "bad", {}, io.BytesIO(body))
+urllib.request.urlopen = boom
+r = d.ask("SECRETKEY123", "item", {"type": "noul", "instructions": "q"})
+assert r["error"].startswith("HTTP 400: bad ***") and len(r["error"]) < 140 and "SECRETKEY123" not in r["error"], r
+d.log_usage("the question about a page", [r])
+line = json.loads(open(os.path.expanduser("~/.local/state/decide/usage.jsonl")).read())
+assert line["question_chars"] == 25 and "question" not in line and {"ts", "items", "errors", "input_tokens", "usd"} <= set(line), line
+PY
+HOME=$HOME_SAVE
 ok "profiles lists a profile"    0 'Default' -- profiles
 ok "open with an unknown profile fails before opening" 1 'no profile "nope"' -- open "http://127.0.0.1:$PORT/fixture2.html" --profile nope
 ok "open option typo fails"      1 'unknown or incomplete open option' -- open "http://127.0.0.1:$PORT/fixture2.html" --profil Default
@@ -258,10 +349,10 @@ MINE=$(grep -F "\"task\": \"$UMB_TASK\"" "$LOG")
 N=$(print -r -- "$MINE" | wc -l | tr -d ' ')
 FAILED=$(print -r -- "$MINE" | grep -c '"exit": [1-9]')
 echo "     log lines for this run: $N (failures: $FAILED)"
-[[ $N -eq $CALLS && $FAILED -eq 43 ]] && { PASS=$((PASS+1)); echo "ok   log has $N lines (one per call), $FAILED non-zero exits"; } || { FAIL=$((FAIL+1)); echo "FAIL log lines=$N failures=$FAILED (wanted $CALLS and 43)"; }
+[[ $N -eq $CALLS && $FAILED -eq 55 ]] && { PASS=$((PASS+1)); echo "ok   log has $N lines (one per call), $FAILED non-zero exits"; } || { FAIL=$((FAIL+1)); echo "FAIL log lines=$N failures=$FAILED (wanted $CALLS and 55)"; }
 OUT=$MINE; absent "log has no URL path" 'fixture.html'; absent "log has no typed value" 'hello world'; absent "log has no scheme" 'http'
 ok "cost totals"              0 "$UMB_TASK: " -- cost --task "$UMB_TASK"
-ok "cost counts failures"     0 ', 43 failures,' -- cost --task "$UMB_TASK"
+ok "cost counts failures"     0 ', 55 failures,' -- cost --task "$UMB_TASK"
 
 echo "$PASS passed, $FAIL failed"
 [ $FAIL -eq 0 ]
