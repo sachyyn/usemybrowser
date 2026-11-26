@@ -37,7 +37,7 @@ def main():
            "--permission-mode", "dontAsk",
            "--strict-mcp-config", "--disable-slash-commands",
            "--no-session-persistence", "--setting-sources", ""]
-    env = dict(os.environ, UMB_TASK=f"bench-{task}-{arm}-{run_id}",
+    env = dict(os.environ, PATH=f"{BENCH.parent / 'bin'}:{os.environ['PATH']}", UMB_TASK=f"bench-{task}-{arm}-{run_id}",
                CLAUDE_CODE_DISABLE_AUTO_MEMORY="1")
     print("cmd:", " ".join(cmd), "(prompt on stdin)", file=sys.stderr)
     t0 = time.time()
