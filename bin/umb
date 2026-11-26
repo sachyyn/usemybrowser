@@ -44,8 +44,10 @@ case "$1" in
     echo "usage: umb snap <tab> [--find re] [--interactive] [--within css] [--delta] [--max n]"
     echo "       umb click <tab> <ref|text:\"Exact text\"|css:\"sel\"> [--force]"
     echo "       umb fill <tab> <target> <value>"
-    echo "       umb keys <tab> <step>...   steps: click:<target> type:<text> type:@<file> key:<Key|Combo> wait:<ms>"
-    echo "         (real input, stops at the first failure; type:@file sends tabs and newlines as Tab and Enter)"
+    echo "       umb keys <tab> <step>...   steps: click:<target> type:<text> type:@<file> paste:<text> paste:@<file> clear key:<Key|Combo> wait:<ms>"
+    echo "         real input, stops at the first failure. type is for short text (one daemon call per tab-separated cell, refused above 30);"
+    echo "         paste is for blocks: one synthetic paste event in the page (not the system clipboard) with tabs and newlines as cells and rows;"
+    echo "         clear selects all text in the focused input and presses Delete (key:Meta+A does not work in ordinary inputs)"
     echo "       click, fill, keys, run and recipe also take proof flags, checked after the action:"
     echo "         --expect <text> --expect-gone <text> --expect-url <part> [--timeout ms, default 5000]"
     echo "         --read <css> [--read-max n, default 500]   print that part of the page as text"
@@ -179,7 +181,7 @@ send() {
   ERR=${${out//$'\n'/ }## #}; ERR=${ERR%%Valid keys are*}; ERR=${ERR:0:200}; return 1
 }
 
-# umb keys <tab> <step>...: click:<target> type:<text> type:@<file> key:<Key> wait:<ms>. Stops at the first failure.
+# umb keys <tab> <step>...: click:<target> type:<text> type:@<file> paste:<text|@file> clear key:<Key> wait:<ms>. Stops at the first failure.
 keys() {
   local tab=$1 step kind val n=0 i=0 more cell cells total=$(( $# - 1 )) before after out; shift
   (( total )) || die "usage: umb keys <tab> <step>...   (click:<target> type:<text> type:@<file> key:<Key> wait:<ms>)"
@@ -194,11 +196,18 @@ keys() {
         fi
         # The daemon types a newline as Enter but a tab as a tab character, so split at tabs and press Tab ourselves.
         cells=("${(@ps:\t:)val}")
+        (( ${#cells} > 30 )) && ERR="typing ${#cells} cells needs one daemon call each (about $(( ${#cells} * 3 / 10 )) s); use paste:${step#type:} for blocks"
         [ -z "$ERR" ] && for cell in "${cells[@]}"; do
           i=$((i + 1)); more=; (( i < ${#cells} )) && more=Tab
           if [ -n "$cell" ]; then send "$tab" text "$cell" $more; elif [ -n "$more" ]; then send "$tab" key Tab; fi || break
         done; i=0 ;;
       key) send "$tab" key "$val" ;;
+      clear) page_op "$tab" selectall >/dev/null 2>&1 && send "$tab" key Delete || ERR="nothing to clear: click an input first" ;;
+      paste)  # the whole text as one paste event in the page; not the system clipboard
+        if [[ "$val" == @* ]]; then
+          [ -f "${val#@}" ] && { val=$(cat "${val#@}"; print x); val=${val%x}; val=${val//$'\r'/}; } || ERR="no such file: ${val#@}"
+        fi
+        [ -n "$ERR" ] || { out=$(page_op "$tab" paste "$val" 2>&1) || ERR=$out; } ;;
       wait) [[ "$val" == <-> ]] && sleep $(( val / 1000.0 )) || ERR="wait needs milliseconds" ;;
       *) ERR="unknown step kind \"$kind\"" ;;
     esac

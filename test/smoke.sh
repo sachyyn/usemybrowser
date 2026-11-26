@@ -93,6 +93,17 @@ ok "keys type:@file fills a grid, --read shows it" 0 'a1,b1,a2,' -- keys $TAB "c
 ok "keys missing file fails" 1 'no such file' -- keys $TAB "type:@$TMPD/none.tsv"
 ok "keys key combo"        0 'Meta+A'                         -- keys $TAB 'key:Meta+A' --read '#keylog'
 
+# clear, paste, and the type:@file size guard.
+ok "keys clear replaces the old text" 0 'keys: 3 steps ok' -- keys $TAB 'click:css:#name' clear 'type:new'
+ok "clear result"             0 '"new"'                       -- evaluate_script --pageId $TAB '() => document.getElementById("name").value'
+ok "keys paste into an input" 0 'keys: 3 steps ok'            -- keys $TAB 'click:css:#name' clear 'paste:pasted text'
+ok "paste result"             0 '"pasted text"'               -- evaluate_script --pageId $TAB '() => document.getElementById("name").value'
+printf 'p1\tq1\np2\tq2\n' > "$TMPD/paste.tsv"
+ok "paste @file fills the grid in one step" 0 'p1,q1,p2,q2'  -- keys $TAB "click:css:[aria-label='Cell A1']" "paste:@$TMPD/paste.tsv" --read '#cells'
+python3 -c 'print("x\t" * 40)' > "$TMPD/long.tsv"
+ok "type:@file refuses a block" 1 'use paste:@'               -- keys $TAB "type:@$TMPD/long.tsv"
+ok "paste into a button fails" 1 'did not take the paste'  -- keys $TAB 'key:Escape' 'click:css:#plain' 'paste:x'
+
 # Proof flags: --expect, --expect-gone, --expect-url, --read.
 ok "expect ok"                0 'expect ok'                   -- click $TAB css:#plain --expect 'plain clicked'
 ok "expect failed"            1 'expect failed: "never there" not on the page' -- click $TAB css:#plain --expect 'never there' --timeout 500
@@ -135,10 +146,10 @@ MINE=$(grep -F "\"task\": \"$UMB_TASK\"" "$LOG")
 N=$(print -r -- "$MINE" | wc -l | tr -d ' ')
 FAILED=$(print -r -- "$MINE" | grep -c '"exit": [1-9]')
 echo "     log lines for this run: $N (failures: $FAILED)"
-[[ $N -eq $CALLS && $FAILED -eq 14 ]] && { PASS=$((PASS+1)); echo "ok   log has $N lines (one per call), $FAILED non-zero exits"; } || { FAIL=$((FAIL+1)); echo "FAIL log lines=$N failures=$FAILED (wanted $CALLS and 14)"; }
+[[ $N -eq $CALLS && $FAILED -eq 16 ]] && { PASS=$((PASS+1)); echo "ok   log has $N lines (one per call), $FAILED non-zero exits"; } || { FAIL=$((FAIL+1)); echo "FAIL log lines=$N failures=$FAILED (wanted $CALLS and 16)"; }
 OUT=$MINE; absent "log has no URL path" 'fixture.html'; absent "log has no typed value" 'hello world'; absent "log has no scheme" 'http'
 ok "cost totals"              0 "$UMB_TASK: " -- cost --task "$UMB_TASK"
-ok "cost counts failures"     0 ', 14 failures,' -- cost --task "$UMB_TASK"
+ok "cost counts failures"     0 ', 16 failures,' -- cost --task "$UMB_TASK"
 
 echo "$PASS passed, $FAIL failed"
 [ $FAIL -eq 0 ]

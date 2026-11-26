@@ -33,6 +33,15 @@
   document.querySelectorAll('#grid input').forEach((i) => i.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') i.closest('tr').nextElementSibling?.querySelector('input')?.focus();
   }));
+  // Like a spreadsheet: a paste fills cells from the focused one, tabs across, newlines down.
+  document.getElementById('grid').addEventListener('paste', (e) => {
+    e.preventDefault();
+    const rows = [...document.querySelectorAll('#grid tr')], r0 = rows.indexOf(e.target.closest('tr')), c0 = [...e.target.closest('tr').querySelectorAll('input')].indexOf(e.target);
+    e.clipboardData.getData('text/plain').replace(/\n$/, '').split('\n').forEach((line, r) => line.split('\t').forEach((v, c) => {
+      const cell = rows[r0 + r]?.querySelectorAll('input')[c0 + c]; if (cell) cell.value = v;
+    }));
+    e.target.dispatchEvent(new Event('input', { bubbles: true }));
+  });
   document.getElementById('grid').addEventListener('input', () => {
     document.getElementById('cells').textContent = [...document.querySelectorAll('#grid input')].map((i) => i.value).join(',');
   });
