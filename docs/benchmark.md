@@ -125,6 +125,37 @@ What this says v2 needs:
 
 Limits: one run per arm, so differences of this size are suggestive. browse ran with default settings. The checker does not test whether the dropdown rejects bad input or how the chart looks.
 
+## Sheets task: where the money goes, and v2 after acting on it (2026-11-26)
+
+Prices worked out from the bills: $4.00 per million tokens for new material entering the conversation, $0.10 per million for re-reading earlier turns, $10.00 per million for what the agent writes.
+
+A per-turn trace of a v2 run ($0.495, 46 turns) showed 12 screenshots of about 3,000 tokens each: $0.147 entering plus $0.069 re-read, about 40% of the bill. All text returned by the tool was about 3,600 tokens ($0.014). The agents screenshot because Sheets draws cells on a canvas.
+
+Changes made in response: `look` (a small vision model answers, the agent never gets the image), `shot` (small cropped image), `sheets-read` and `sheets-formula` recipes (cells as text), proof flags (`--expect`, `--read`), and `keys` (real input steps in one command, with `paste` for blocks).
+
+A first attempt that typed blocks cell by cell did worse ($0.71, 79 turns, 21.8 min): typing 246 cells passed the agent's 2-minute command limit, typed formulas were corrupted by the app's suggestions, and `look` misread dense grids. Replaced by a one-step paste (41 x 8 cells in 2.6 s) and a guide rule that `look` is for coarse visuals only.
+
+Three runs per tool, same model and task. Screenshot counts are from traced runs.
+
+| Tool | Run 1 | Run 2 | Run 3 | Average | Turns | Screenshots seen by the agent | Checker |
+|---|---|---|---|---|---|---|---|
+| v1 (`helium`) | $0.64 | $0.51 | $0.61 | $0.59 | 70, 54, 50 | 7 to 12 | all passed |
+| browse 0.1.5 | $0.41 | $0.37 | $0.42 | $0.40 | 43, 24, 28 | 15 to 17 | all passed |
+| v2 before these changes | $0.57 | $0.50 | | $0.53 | 78, 46 | 12 | passed (one run not scored) |
+| v2 with `look`, readers, `keys paste` | $0.38 | $0.40 | $0.35 | $0.38 | 58, 59, 45 | 2, 0, 0 | 27/27, 27/27, 26/27 |
+
+The v2 figures exclude the small vision model's own charge, which was $0.003 to $0.008 per run (10 to 20 calls).
+
+The one failed check: in run 3 the Region dropdown's options were wrong ("EastNorth", "NorthSouth", ...), so text went into the wrong option fields. The run reported success.
+
+Bill split for the three new v2 runs: entering $0.11, re-read $0.10 to $0.13, agent's writing $0.15. Entering cost halved (it was $0.23 to $0.26). The agent's own writing is now the largest part, and turns are still about double browse's.
+
+Reading it:
+
+- v2 went from $0.53 to $0.38 on average, 36% below v1 and level with browse within the noise of three runs.
+- browse is still better on turns and had no failed check. v2 had one in three runs.
+- Next levers for v2: fewer and shorter commands (app macros such as "go to range", "open menu item"), and a verification step for dialogs with several fields.
+
 ### Not tested
 
 - Sites that reject scripted input (some banking and checkout pages).
