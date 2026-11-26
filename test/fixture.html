@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>UMB fixture</title>
+<style>
+  body { font: 16px sans-serif; margin: 20px; }
+  #stage { position: relative; display: inline-block; margin: 10px 0; }
+  #overlay { position: absolute; inset: 0; background: rgba(255, 0, 0, .3); }
+</style></head>
+<body>
+<main>
+  <h1>Fixture</h1>
+  <button id="plain" onclick="log('plain clicked')">Save</button>
+  <div id="stage">
+    <button id="covered" onclick="log('covered clicked')">Covered</button>
+    <div id="overlay" class="cookie-banner">Cookie banner</div>
+  </div>
+  <p><input id="name" type="text" aria-label="Name"></p>
+  <p><label><input id="agree" type="checkbox" checked> Subscribe</label></p>
+  <p><select id="color" aria-label="Colour"><option value="r">Red</option><option value="g">Green</option></select></p>
+  <p><a id="next" href="fixture2.html">Go next</a></p>
+  <p><span id="span" onclick="log('span clicked')">Plain span</span></p>
+  <p><span onclick="log('dup')">Twin</span> <span onclick="log('dup')">Twin</span></p>
+  <div id="log" aria-live="polite"></div>
+  <div id="later"></div>
+</main>
+<script>
+  function log(m) { document.getElementById('log').textContent = m; }
+  setTimeout(() => {
+    const b = document.createElement('button');
+    b.textContent = 'Appeared';
+    document.getElementById('later').append(b);
+  }, Number(new URLSearchParams(location.search).get('delay')) || 1000);
+</script>
+</body>
+</html>
