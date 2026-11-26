@@ -44,6 +44,8 @@ case "$1" in
     echo "       umb click <tab> <ref|text:\"Exact text\"|css:\"sel\"> [--force]"
     echo "       umb fill <tab> <target> <value>"
     echo "       umb wait <tab> [--text s] [--gone s] [--url s] [--ref eN|--css sel] [--timeout ms]"
+    echo "       umb run <tab> <file.js | -> [json args] [--max n]   (script body; scope: args, umb.find/click/fill/wait/sleep/text)"
+    echo "       umb recipe [name [json args] [--tab id]]"
     echo "       umb open <url> | tabs | close <tab> | text <tab> [css] [max] | check <tab> \"question\""
     echo "       umb <other chrome-devtools command>"; exit 0 ;;
 esac
@@ -65,6 +67,7 @@ page_op() {
   local sf="$CACHE/state-$tab.json" js="$CACHE/script-$tab.js" state='{}'
   [ -f "$sf" ] && state=$(<"$sf")
   { echo 'async () => {'; cat "$ROOT/vendor/browse/capture.js" "$ROOT/lib/page.js"
+    [ -n "$BODY" ] && { echo 'const umbUser = async (args, umb) => {'; cat "$BODY"; echo '};'; }  # umb run: the script body
     printf 'return await umbMain(%s, %s, %s);\n}\n' "\"$op\"" "$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1:]))' "$@")" "$state"
   } > "$js"
   cdt evaluate_script --pageId "$tab" --sourcePath "$js" --output-format json | python3 -c '
@@ -97,14 +100,60 @@ print("; ".join(out))' "$@"
 }
 
 act() {  # click|fill: run the op, then report what changed
-  local tab=$1 before after out
+  local tab=$1 before after out sep='; '
   before=$(pages); out=$(page_op "$@" 2>&1)
   # A click that navigates destroys the page script before it can report; the click did happen.
   if [[ $? -ne 0 ]]; then
-    [[ "$out" == *"context was destroyed"* ]] && out="clicked ${3:-target}" || { echo "$out" >&2; exit 1; }
+    [[ "$out" == *"context was destroyed"* ]] || { print -r -- "$out" >&2; exit 1; }
+    [[ $2 == run ]] && out="script ended by a navigation; no result" || out="clicked ${3:-target}"
   fi
+  [[ $2 == run ]] && sep=$'\n'
   sleep 0.4; after=$(pages)
-  echo "$out; $(what_changed "$tab" "$before" "$after")"
+  print -r -- "$out$sep$(what_changed "$tab" "$before" "$after")"
+}
+
+open_tab() {  # prints: <id> "<title>" <url>
+  [ -n "$1" ] || die "usage: umb open <url>"
+  cdt new_page "$1" --background --output-format json | python3 -c '
+import json, sys
+raw = sys.stdin.read()
+try: p = max(json.loads(raw)["pages"], key=lambda p: p["id"])
+except Exception: sys.exit("umb: could not open the page: " + raw[:300])
+print("%d \"%s\" %s" % (p["id"], p["title"], p["url"]))'
+}
+close_tab() {
+  local out=$(cdt close_page "$1" --output-format json)
+  [[ "$out" == *'"Error'* ]] && die "could not close tab $1: ${out:0:200}"
+  rm -f "$CACHE/state-$1.json" "$CACHE/script-$1.js" "$CACHE/body-$1.js"; echo "closed $1"
+}
+
+# umb recipe [name [json args] [--tab id]]: no name lists recipes. A .js recipe is a page script for `umb run`,
+# opened in its own background tab (header "// url: <template with {arg} or {arg|default}>") and closed after
+# unless the header says "// keep-tab". A .sh recipe calls umb itself and gets the JSON args as $1.
+recipe() {
+  local f files name=$1 json=${2:-'{}'} tab url out rc
+  if [ -z "$name" ]; then
+    for f in "${UMB_RECIPES:-$ROOT/recipes}"/*.(js|sh)(N); do printf '%-18s %s\n' ${${f:t}%.*} "$(sed -nE 's@^(//|#) purpose: @@p' "$f")"; done; return 0
+  fi
+  [[ "$name" =~ '^[a-z0-9-]+$' ]] && files=("${UMB_RECIPES:-$ROOT/recipes}"/$name.(js|sh)(N)) && f=${files[1]} || true
+  [ -n "$f" ] || die "no recipe \"$name\"; list them with: umb recipe"
+  if [[ "$f" == *.sh ]]; then env -u UMB_INNER UMB="$ROOT/bin/umb" "$f" "$json"; return $?; fi
+  [[ "$3" == --tab ]] && tab=$4 || {
+    url=$(python3 -c '
+import json, re, sys
+from urllib.parse import quote
+a, m = json.loads(sys.argv[2]), re.search(r"^// url: (\S+)", open(sys.argv[1]).read(), re.M)
+if not m: sys.exit("umb: recipe has no \"// url:\" header; pass --tab <id>")
+def sub(g):
+    v = a.get(g[1], g[2])
+    if v is None: sys.exit("step failed: url: missing arg " + g[1])
+    return quote(str(v), safe="")
+print(re.sub(r"\{(\w+)(?:\|([^}]*))?\}", sub, m[1]))' "$f" "$json") || exit 1
+    out=$(open_tab "$url") || exit 1; tab=${out%% *}
+  }
+  BODY=$f; page_op "$tab" run "$json"; rc=$?
+  [ -n "$url" ] && ! grep -q '^// keep-tab' "$f" && close_tab "$tab" >/dev/null
+  return $rc
 }
 
 CMD=$1
@@ -124,23 +173,18 @@ case "$CMD" in
       (( EPOCHREALTIME > deadline )) && die "wait timed out after ${ms}ms: $out"
       sleep 0.25
     done ;;
-  open)
-    [ -n "$2" ] || die "usage: umb open <url>"
-    cdt new_page "$2" --background --output-format json | python3 -c '
-import json, sys
-raw = sys.stdin.read()
-try: p = max(json.loads(raw)["pages"], key=lambda p: p["id"])
-except Exception: sys.exit("umb: could not open the page: " + raw[:300])
-print("%d \"%s\" %s" % (p["id"], p["title"], p["url"]))' ;;
+  open) open_tab "$2" ;;
   tabs)
     pages | python3 -c '
 import json, sys
 for p in json.load(sys.stdin)["pages"]:
     print("%d%s \"%s\" %s" % (p["id"], "*" if p["selected"] else "", p["title"][:60], p["url"][:100]))' ;;
-  close)
-    need_tab "$2"; out=$(cdt close_page "$2" --output-format json)
-    [[ "$out" == *'"Error'* ]] && die "could not close tab $2: ${out:0:200}"
-    rm -f "$CACHE/state-$2.json" "$CACHE/script-$2.js"; echo "closed $2" ;;
+  close) need_tab "$2"; close_tab "$2" ;;
+  run)  # umb run <tab> <file.js | -> [json args] [--max n]
+    need_tab "$2"; [ -n "$3" ] || die "usage: umb run <tab> <file.js | -> [json args] [--max n]"
+    if [[ "$3" == - ]]; then BODY="$CACHE/body-$2.js"; cat > "$BODY"; else BODY=$3; [ -f "$BODY" ] || die "no such file: $3"; fi
+    act "$2" run "${@:4}" ;;
+  recipe) shift; recipe "$@" ;;
   check)
     # umb check <tab> "<yes/no question>" [decide options]: screenshot + Gemini Decision in one step.
     [ $# -ge 3 ] || die "usage: umb check <tab> \"<question>\" [decide options]"
@@ -148,21 +192,8 @@ for p in json.load(sys.stdin)["pages"]:
     cdt take_screenshot "$2" --filePath "$SHOT" --format jpeg --quality 70 >/dev/null || die "screenshot failed for tab $2"
     Q="$3"; shift 3
     exec decide -q "$Q" "$@" "@$SHOT" ;;
-  text)
-    # umb text <tab> [css selector] [max chars]: readable text of one part of the page (default: main
-    # content, else body), blank runs squeezed, capped (default 4000).
-    [ $# -ge 2 ] || die "usage: umb text <tab> [css selector] [max chars]"
-    SEL=$(printf %s "$3" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')
-    MAX="${4:-4000}"; [[ "$MAX" == <-> ]] || die "max chars must be a number"
-    # Matches nested inside another match are dropped so text is not repeated.
-    JS="() => { const sel = $SEL;
-      const all = sel ? [...document.querySelectorAll(sel)] : [document.querySelector('main, [role=main]') || document.body];
-      const top = all.filter(e => !all.some(o => o !== e && o.contains(e)));
-      if (!top.length) return 'umb: no element matches ' + sel;
-      const t = top.map(e => e.innerText.replace(/[ \\t]+\\n/g, '\\n').replace(/\\n{3,}/g, '\\n\\n').trim()).filter(Boolean).join('\\n---\\n');
-      return t.length > $MAX ? t.slice(0, $MAX) + '\\n-- cut at $MAX of ' + t.length + ' chars' : t; }"
-    cdt evaluate_script --pageId "$2" --waitForStableDom false "$JS" \
-      | python3 -c 'import json,re,sys; s=sys.stdin.read(); m=re.search(r"```json\n(.*)\n```", s, re.S); print(json.loads(m.group(1)) if m else s.strip())' ;;
+  text)  # umb text <tab> [css selector] [max chars]: readable text of one part of the page
+    need_tab "$2"; page_op "$2" text "${@:3}" ;;
   evaluate_script)  # pass-through, minus the "Script ran on page and returned" wrapper
     cdt "$@" | sed -e '/^Script ran on page and returned:$/d' -e '/^```json$/d' -e '/^```$/d' ;;
   *) cdt "$@" ;;

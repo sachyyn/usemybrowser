@@ -5,7 +5,7 @@ HERE=${0:A:h}; UMB=${HERE:h}/bin/umb
 cd "$HERE" || exit 1
 PORT=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1])')
 python3 -m http.server "$PORT" --bind 127.0.0.1 >/dev/null 2>&1 & SRV=$!
-export UMB_TASK="smoke-$$"; unset UMB_NO_LOG
+export UMB_TASK="smoke-$$" UMB_RECIPES="$HERE/recipes"; unset UMB_NO_LOG
 PASS=0; FAIL=0; TAB=""; CALLS=1  # umb open is call 1
 cleanup() { [ -n "$TAB" ] && "$UMB" close "$TAB" >/dev/null 2>&1; kill $SRV 2>/dev/null; }
 trap cleanup EXIT
@@ -61,6 +61,27 @@ ok "wait gone"                0 ok                            -- wait $TAB --gon
 ok "tabs lists ours"          0 "$TAB"                        -- tabs
 absent "no update notice"     'Update available'
 
+ok "text near miss"           1 'near misses: text:"Debt to Equity"' -- click $TAB 'text:"debt to"'
+ok "find lists plain text"    0 'text "Debt to Assets"'       -- snap $TAB --find 'debt to'
+ok "find nothing says what was searched" 0 'no match for /zzzq/i: searched' -- snap $TAB --find zzzq
+ok "plain snap is a delta baseline" 0 'button "Save"'         -- snap $TAB
+ok "delta after plain snap"   0 'no changes since the last snap' -- snap $TAB --delta
+
+ok "run: args, fill, click, return" 0 '{"who":"ann","log":"span clicked"}' -- run $TAB - '{"who":"ann"}' <<'JS'
+umb.fill('css:"#name"', args.who);
+await umb.click('text:"Plain span"');
+await umb.wait({ text: 'span clicked' }, 2000);
+return { who: umb.find('css:"#name"').value, log: umb.text('#log', 100) };
+JS
+ok "run: what changed line"   0 'url unchanged'                -- run $TAB - <<<'return "plain string"'
+ok "run: error exits 1"       1 'umb: run failed: boom'       -- run $TAB - <<<'throw new Error("boom")'
+ok "run: output cap"          0 '-- cut at 20 of 300 chars'   -- run $TAB - --max 20 <<<'return "x".repeat(300)'
+ok "recipe list shows purpose" 0 'fixture-echo       fixture recipe:' -- recipe
+ok "recipe runs in its own tab" 0 '{"title":"UMB fixture","name":"smoke","log":"span clicked"}' -- recipe fixture-echo "{\"port\":$PORT,\"name\":\"smoke\"}"
+ok "recipe missing arg fails" 1 'step failed: url: missing arg port' -- recipe fixture-echo
+ok "recipe tab was closed"    0 "$TAB" -- tabs
+absent "recipe left no tab open" "v=smoke"
+
 ok "link click navigates"     0 '(navigated)'                 -- click $TAB 'text:Go next'
 ok "snap after navigation"    0 'link "Back"'                 -- snap $TAB
 
@@ -70,10 +91,10 @@ MINE=$(grep -F "\"task\": \"$UMB_TASK\"" "$LOG")
 N=$(print -r -- "$MINE" | wc -l | tr -d ' ')
 FAILED=$(print -r -- "$MINE" | grep -c '"exit": [1-9]')
 echo "     log lines for this run: $N (failures: $FAILED)"
-[[ $N -eq $CALLS && $FAILED -eq 5 ]] && { PASS=$((PASS+1)); echo "ok   log has $N lines (one per call), $FAILED non-zero exits"; } || { FAIL=$((FAIL+1)); echo "FAIL log lines=$N failures=$FAILED (wanted $CALLS and 5)"; }
+[[ $N -eq $CALLS && $FAILED -eq 8 ]] && { PASS=$((PASS+1)); echo "ok   log has $N lines (one per call), $FAILED non-zero exits"; } || { FAIL=$((FAIL+1)); echo "FAIL log lines=$N failures=$FAILED (wanted $CALLS and 8)"; }
 OUT=$MINE; absent "log has no URL path" 'fixture.html'; absent "log has no typed value" 'hello world'; absent "log has no scheme" 'http'
 ok "cost totals"              0 "$UMB_TASK: " -- cost --task "$UMB_TASK"
-ok "cost counts failures"     0 ', 5 failures,' -- cost --task "$UMB_TASK"
+ok "cost counts failures"     0 ', 8 failures,' -- cost --task "$UMB_TASK"
 
 echo "$PASS passed, $FAIL failed"
 [ $FAIL -eq 0 ]
