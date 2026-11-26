@@ -156,6 +156,29 @@ Reading it:
 - browse is still better on turns and had no failed check. v2 had one in three runs.
 - Next levers for v2: fewer and shorter commands (app macros such as "go to range", "open menu item"), and a verification step for dialogs with several fields.
 
+## Sheets task with site notes (2026-11-26)
+
+After the runs above, turns were the main cost: about half a cent each, and the agent spent them rediscovering how Sheets works (23 snapshots and 19 clicks through menus, 24 separate range navigations in one run).
+
+Added: `umb notes <host>` with a 47-line notes file for Google Sheets (verified one-line idioms), three small recipes (`sheets-menu`, `sheets-tab-rename`, `sheets-validate-list`), `umb text` reading input values, `umb` on the agent's PATH, and a guide rule to take fewer, bigger turns.
+
+| Tool | Run 1 | Run 2 | Run 3 | Average | Turns | Time | Screenshots | Checker |
+|---|---|---|---|---|---|---|---|---|
+| v1 (`helium`) | $0.64 | $0.51 | $0.61 | $0.59 | 70, 54, 50 | 3 to 6 min | 7 to 12 | all passed |
+| browse 0.1.5 | $0.41 | $0.37 | $0.42 | $0.40 | 43, 24, 28 | 3 to 9 min | 15 to 17 | all passed |
+| v2 with `look`, readers, paste | $0.38 | $0.40 | $0.35 | $0.38 | 58, 59, 45 | about 5 min | 0 to 2 | one check failed in one run |
+| v2 with site notes | $0.12 | $0.12 | $0.11 | $0.12 | 10, 9, 8 | 2.5 min | 0 | 27/27 in all three |
+
+Bill split per run with notes: entering $0.05 to $0.06, re-read about $0.01, agent's writing about $0.05. No failed commands in any of the three runs (108 to 119 commands each).
+
+Reading it:
+
+- Site notes cut the cost by about 70% against the previous v2 and against browse, and by about 80% against v1, with every check passing.
+- This is a result about knowledge, not mechanics. The notes were written for Sheets by testing jobs close to this task's steps. The other arms had no such notes. A fair test of the tools themselves would give browse the same knowledge in its own commands.
+- It says nothing yet about a site with no notes. That needs a second task on a different site.
+
+Found during these runs: `umb open` puts a new tab in whichever browser profile window was used last. Two of these three runs created their spreadsheet in a different Google account from the first because the active window changed. The tool needs a way to choose the profile.
+
 ### Not tested
 
 - Sites that reject scripted input (some banking and checkout pages).
