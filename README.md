@@ -148,6 +148,8 @@ The agent acts inside your real browser, signed in as you.
 - Profiles: without `--profile` or `UMB_PROFILE`, a new tab goes to whichever profile window was active last. In the benchmark this put work in the wrong account. Set a default profile.
 - `look`, `check` and `decide` send screenshots or text to Google's Gemini API, which can include pages you are signed in to. The skill tells the agent to ask before very private pages. With no Gemini key, nothing is sent.
 - With remote debugging on, a process you allow can control the whole browser. Turn it off when you do not want that.
+- `keys type:@file`, `keys paste:@file` and `run <file>` read local files and can put their contents into a web page. An agent that follows hostile instructions on a page could leak a file this way.
+- Nothing in umb defends against instructions hidden in pages, other than the skill telling the agent to ignore them.
 
 ## Borrowed code
 
