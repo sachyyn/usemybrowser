@@ -137,6 +137,19 @@ ok "press_key is one short line" 0 'pressed Tab'              -- press_key $TAB 
 ok "type_text is one short line" 0 'typed 3 chars'            -- type_text $TAB abc
 ok "tabs: id, short title, host" 0 "$TAB \"UMB fixture\" 127.0.0.1" -- tabs
 
+# Site notes: a fixture folder via UMB_NOTES with notes for 127.0.0.1 only.
+export UMB_NOTES="$HERE/notes"
+ok "notes lists hosts"         0 '127.0.0.1'                   -- notes
+ok "notes for a host"          0 'fixture notes:'              -- notes 127.0.0.1
+ok "notes for a tab id"        0 'fixture notes:'              -- notes $TAB
+ok "notes missing is one line, exit 0" 0 'no notes for example.com' -- notes example.com
+ok "open adds a notes line"    0 'notes: umb notes 127.0.0.1'  -- open "http://127.0.0.1:$PORT/fixture2.html"
+"$UMB" close "${OUT%% *}" >/dev/null 2>&1; CALLS=$((CALLS+1))
+UMB_NOTES="$TMPD/nonotes" ok "open adds nothing without notes" 0 '127.0.0.1' -- open "http://127.0.0.1:$PORT/fixture2.html"
+absent "no notes line when none exist" 'notes:'
+"$UMB" close "${OUT%% *}" >/dev/null 2>&1; CALLS=$((CALLS+1))
+unset UMB_NOTES
+
 ok "link click navigates"     0 '(navigated)'                 -- click $TAB 'text:Go next'
 ok "snap after navigation"    0 'link "Back"'                 -- snap $TAB
 

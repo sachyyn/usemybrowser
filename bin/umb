@@ -56,9 +56,25 @@ case "$1" in
     echo "       umb wait <tab> [--text s] [--gone s] [--url s] [--ref eN|--css sel] [--timeout ms]"
     echo "       umb run <tab> <file.js | -> [json args] [--max n]   (script body; scope: args, umb.find/click/fill/wait/sleep/text)"
     echo "       umb recipe [name [json args] [--tab id]]   (--tab runs it in that open tab; sheets-* recipes need it)"
+    echo "       umb notes [host|tab]   proven idioms for a site (no argument: hosts that have notes); umb open prints a notes: line when there are some"
     echo "       umb open <url> | tabs | close <tab> | text <tab> [css] [max] | check <tab> \"question\""
     echo "       umb <other chrome-devtools command>   (a relative --filePath is made absolute from your folder)"; exit 0 ;;
 esac
+
+# Site notes: one Markdown file per host in $UMB_NOTES (default: notes/ in the repo).
+NOTES_DIR=${UMB_NOTES:-$ROOT/notes}
+site_host() { python3 -c 'import sys; from urllib.parse import urlparse; print(urlparse(sys.argv[1]).hostname or "")' "$1"; }
+show_notes() {  # $1 = host
+  local f="$NOTES_DIR/$1.md"
+  [[ "$1" =~ '^[A-Za-z0-9.-]+$' && -f "$f" ]] || { echo "no notes for ${1:-that host}"; return 0; }
+  cat "$f"
+}
+if [[ "$1" == notes && "$2" != <-> ]]; then
+  if [ -z "$2" ]; then
+    for f in "$NOTES_DIR"/*.md(N); do echo ${${f:t}%.md}; done
+  else show_notes "$2"; fi
+  exit 0
+fi
 
 # Start only when no daemon runs or the running one is not attached to this profile. Never restart a
 # healthy daemon: each restart opens a new connection and the browser asks the user to Allow again.
@@ -324,7 +340,15 @@ case "$CMD" in
     [ $rc -eq 0 ] && { echo "$WAIT_OUT"; exit 0; }
     [ $rc -eq 2 ] && die "wait timed out after ${ms}ms: $WAIT_OUT"
     exit 1 ;;
-  open) open_tab "$2" ;;
+  open)
+    out=$(open_tab "$2") || exit 1; echo "$out"
+    h=$(site_host "$2"); [[ "$h" =~ '^[A-Za-z0-9.-]+$' && -f "$NOTES_DIR/$h.md" ]] && echo "notes: umb notes $h"; exit 0 ;;
+  notes)  # umb notes <tab id>
+    h=$(site_host "$(pages | python3 -c '
+import json, sys
+t = sys.argv[1]
+print(next((p["url"] for p in json.load(sys.stdin)["pages"] if str(p["id"]) == t), ""))' "$2")")
+    [ -n "$h" ] || die "no tab $2"; show_notes "$h" ;;
   tabs)
     pages | python3 -c '
 import json, sys
