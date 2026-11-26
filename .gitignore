@@ -2,3 +2,4 @@ bench/results/
 bench/work/*
 !bench/work/.gitkeep
 bench/tasks/*/task.local.md
+__pycache__/
