@@ -21,10 +21,22 @@
   <p><span id="span" onclick="log('span clicked')">Plain span</span></p>
   <p><span onclick="log('dup')">Twin</span> <span onclick="log('dup')">Twin</span></p>
   <div id="results"><div onclick="log('debt-equity')">Debt to Equity</div><div onclick="log('debt-assets')">Debt to Assets</div></div>
+  <table id="grid"><tr><td><input aria-label="Cell A1"></td><td><input aria-label="Cell B1"></td></tr>
+    <tr><td><input aria-label="Cell A2"></td><td><input aria-label="Cell B2"></td></tr></table>
+  <div id="keylog"></div>
+  <div id="cells"></div>
   <div id="log" aria-live="polite"></div>
   <div id="later"></div>
 </main>
 <script>
+  // Like a spreadsheet: Enter moves to the first cell of the next row.
+  document.querySelectorAll('#grid input').forEach((i) => i.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') i.closest('tr').nextElementSibling?.querySelector('input')?.focus();
+  }));
+  document.getElementById('grid').addEventListener('input', () => {
+    document.getElementById('cells').textContent = [...document.querySelectorAll('#grid input')].map((i) => i.value).join(',');
+  });
+  document.addEventListener('keydown', (e) => { document.getElementById('keylog').textContent = (e.metaKey ? 'Meta+' : '') + e.key; });
   function log(m) { document.getElementById('log').textContent = m; }
   setTimeout(() => {
     const b = document.createElement('button');
