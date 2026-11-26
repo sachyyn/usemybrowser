@@ -179,6 +179,33 @@ Reading it:
 
 Found during these runs: `umb open` puts a new tab in whichever browser profile window was used last. Two of these three runs created their spreadsheet in a different Google account from the first because the active window changed. The tool needs a way to choose the profile.
 
+## Shoe research task (2026-11-26)
+
+Task `shoe-deal`: recommend 3 to 5 running shoes for a described runner and find genuine, size-specific deals on Indian sites, with links, sellers, delivery, coupons, returns and warranty. Research through the browser tool only; read-only. v2 has no site notes for any site in this task. One run per tool.
+
+| Measure | v2 (`umb`) | v1 (`helium`) | browse 0.1.5 |
+|---|---|---|---|
+| Cost | $0.27 | $0.43 | $0.54 |
+| Turns | 29 | 38 | 46 |
+| Time | 4.4 min | 7.9 min | 7.8 min |
+| Page text returned | 34k chars | 67k chars | 63k chars |
+| Non-browser fetching | none | none | none |
+| Quality, graded blind against the brief (of 27) | 21.5 | 23.5 | 22.5 |
+| Links that load the named shoe | 5 of 5 | 4 of 4 | 3 of 3 |
+| Stated prices that match the page | 4 of 5 | 3 of 3 | 3 of 3 |
+| Grader's rank | 3rd | 1st | 2nd |
+
+Quality was graded by a separate agent that did not know which tool wrote which answer. It opened every link in the browser and compared prices, then scored a 12-item checklist taken from the brief. The checklist score is a model's judgment; the link and price checks are facts.
+
+Reading it:
+
+- v2 was cheapest and fastest but ranked last on quality. Its headline deal price (Rs 9,359) did not match the live page (Rs 11,699), and it separated tested findings from maker claims less clearly.
+- v1 cost 60% more than v2 and gave the best answer: every checked price matched, and it found cheaper official-site deals the others missed.
+- The quality gap is small (2 points of 27) and this is one run per tool. Neither the cost order nor the quality order is established yet.
+- v2 read half as much page text. That saved money and may be why it missed things. Reading less is only a saving when the answer stays as good.
+
+During grading, a script bug in the grading agent closed a tab that was already open in the browser. Nothing in the tool stops an agent from acting on a tab it did not open. Tab ownership moves to the top of the list.
+
 ### Not tested
 
 - Sites that reject scripted input (some banking and checkout pages).
