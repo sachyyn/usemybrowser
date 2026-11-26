@@ -1,17 +1,19 @@
 #!/bin/bash
-# Installs the helium and decide commands, the chrome-devtools CLI they wrap, and the agent skill.
+# Installs umb (and decide), the chrome-devtools CLI they wrap, and the agent skill.
 # Safe to run again: a file that already exists and differs from this repo is left alone.
-# It never starts the daemon, so Helium shows no "Allow" prompt during install.
+# It never starts the daemon, so the browser shows no "Allow" prompt during install.
+# It never touches ~/.config/umb, where learned site notes live.
 #
 # Usage: ./install.sh [--force]
-#   --force  overwrite existing scripts and SKILL.md. LESSONS.md is your own log and is never overwritten.
+#   --force  overwrite installed files that differ from this repo, and replace an old v1 `helium` command.
 set -eu
 
 CDT_VERSION=1.13.0
 REPO="$(cd "$(dirname "$0")" && pwd)"
 BIN_DIR="$HOME/.local/bin"
 CDT_DIR="$HOME/.local/share/helium-cdt"
-SKILL_DIR="$HOME/.agents/skills/helium-browser"
+APP_DIR="$HOME/.local/share/usemybrowser"
+SKILL_DIR="$HOME/.agents/skills/usemybrowser"
 
 FORCE=0
 case "${1:-}" in
@@ -23,9 +25,9 @@ esac
 missing=0
 need() { echo "missing: $1" >&2; missing=1; }
 
-[ "$(uname -s)" = "Darwin" ] || need "macOS (this tool only supports Helium on macOS)"
-command -v zsh >/dev/null 2>&1 || need "zsh (the helium command is a zsh script)"
-command -v python3 >/dev/null 2>&1 || need "python3 (used by helium text and decide)"
+[ "$(uname -s)" = "Darwin" ] || need "macOS (umb only supports macOS)"
+command -v zsh >/dev/null 2>&1 || need "zsh (umb is a zsh script)"
+command -v python3 >/dev/null 2>&1 || need "python3"
 command -v npm >/dev/null 2>&1 || need "npm"
 if ! command -v node >/dev/null 2>&1; then
   need "node 22.12 or newer"
@@ -37,10 +39,11 @@ if [ "$missing" -ne 0 ]; then
   exit 1
 fi
 
-# Helium can live outside /Applications, so a miss here is a warning and not a stop.
-if [ ! -d "/Applications/Helium.app" ] && [ ! -d "$HOME/Applications/Helium.app" ]; then
-  echo "warning: Helium.app was not found in /Applications or ~/Applications. Install it from https://helium.computer before the first run."
-fi
+found_browser=0
+for app in Helium "Google Chrome"; do
+  [ -d "/Applications/$app.app" ] || [ -d "$HOME/Applications/$app.app" ] && found_browser=1
+done
+[ "$found_browser" -eq 1 ] || echo "warning: no Helium.app or Google Chrome.app found in /Applications or ~/Applications. umb is tested on Helium (https://helium.computer)."
 
 installed_cdt="$(node -p 'try { require(process.argv[1]).version } catch { "" }' "$CDT_DIR/node_modules/chrome-devtools-mcp/package.json")"
 if [ "$installed_cdt" = "$CDT_VERSION" ]; then
@@ -51,28 +54,51 @@ else
   echo "installed: chrome-devtools-mcp@$CDT_VERSION in $CDT_DIR"
 fi
 
-# place <source> <target> <mode> <overwrite with --force: 1 or 0>
+# place <source> <target>: copy a file, keeping its mode; an edited copy survives unless --force.
 place() {
   if [ ! -e "$2" ]; then
     mkdir -p "$(dirname "$2")"
-    install -m "$3" "$1" "$2"
+    cp -p "$1" "$2"
     echo "installed: $2"
   elif cmp -s "$1" "$2"; then
-    echo "unchanged: $2"
-  elif [ "$FORCE" -eq 1 ] && [ "$4" -eq 1 ]; then
-    install -m "$3" "$1" "$2"
+    :
+  elif [ "$FORCE" -eq 1 ]; then
+    cp -p "$1" "$2"
     echo "overwritten: $2"
-  elif [ "$4" -eq 1 ]; then
-    echo "skipped: $2 exists and differs from this repo. Run ./install.sh --force to replace it."
   else
-    echo "skipped: $2 is your own log and is never overwritten."
+    echo "skipped: $2 differs from this repo. Run ./install.sh --force to replace it."
   fi
 }
 
-place "$REPO/bin/helium" "$BIN_DIR/helium" 755 1
-place "$REPO/bin/decide" "$BIN_DIR/decide" 755 1
-place "$REPO/skill/SKILL.md" "$SKILL_DIR/SKILL.md" 644 1
-place "$REPO/skill/LESSONS.md" "$SKILL_DIR/LESSONS.md" 644 0
+# bin/umb finds lib/, vendor/, recipes/ and notes/ next to its own real path.
+for dir in bin lib vendor recipes notes; do
+  (cd "$REPO" && find "$dir" -type f ! -name .DS_Store) | while IFS= read -r f; do
+    place "$REPO/$f" "$APP_DIR/$f"
+  done
+done
+place "$REPO/skill/SKILL.md" "$SKILL_DIR/SKILL.md"
+
+# link <name> <target>: a symlink in ~/.local/bin; anything else already there is kept unless --force.
+link() {
+  local path="$BIN_DIR/$1"
+  mkdir -p "$BIN_DIR"
+  if [ -L "$path" ] && [ "$(readlink "$path")" = "$2" ]; then
+    return
+  elif [ ! -e "$path" ] && [ ! -L "$path" ]; then
+    ln -s "$2" "$path"; echo "linked: $path -> $2"
+  elif [ "$FORCE" -eq 1 ]; then
+    ln -sfn "$2" "$path"; echo "replaced: $path -> $2"
+  else
+    echo "skipped: $path already exists and is not this install."
+    [ "$1" = helium ] && echo "  It looks like the v1 helium command. umb is installed; use umb, or run ./install.sh --force to point helium at umb too."
+    return 0
+  fi
+}
+link umb "$APP_DIR/bin/umb"
+link helium "$APP_DIR/bin/umb"
+link decide "$APP_DIR/bin/decide"
+
+[ -d "$HOME/.agents/skills/helium-browser" ] && echo "note: the v1 skill in ~/.agents/skills/helium-browser was left alone. Delete it when you no longer use helium, so agents read only the v2 skill."
 
 case ":$PATH:" in
   *":$BIN_DIR:"*) ;;
