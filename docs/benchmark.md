@@ -206,7 +206,25 @@ Reading it:
 
 During grading, a script bug in the grading agent closed a tab that was already open in the browser. Nothing in the tool stops an agent from acting on a tab it did not open. Tab ownership moves to the top of the list.
 
-### Shoe research task, three runs per tool
+### Do notes an agent writes for itself help? (2026-11-26)
+
+Sheets task, three runs in a row with the shipped Sheets notes and the three Sheets macros hidden. The guide asks the agent to save what non-obviously worked with `umb note`; saved lines carry into the next run.
+
+| Run | Learned lines available at start | Cost | Turns | Failed commands | Checker |
+|---|---|---|---|---|---|
+| 1 | 0 | $0.33 | 51 | 12 | 25/27 (header not bold, row not frozen) |
+| 2 | 1 | $0.29 | 50 | 3 | 27/27 |
+| 3 | 2 | $0.25 | 37 | 6 | 27/27 |
+
+Each run saved exactly one line, a dense one of about 300 characters covering several idioms.
+
+Reading it:
+
+- Cost fell 24% from run 1 to run 3 and the two later runs passed every check. That is the direction learning should go, on one sequence of three runs, so it is weak evidence.
+- Self-written notes got nowhere near the hand-verified notes ($0.12). Agents save little, and they save what worked once, not the shortest reliable way.
+- The practical route is both: let agents save lines as they go, and turn a site's learned lines into a verified notes file when the site matters.
+
+## Shoe research task, three runs per tool
 
 Two more runs per tool, graded blind by a second grading session with the same checklist (so scores from the two sessions may not be on exactly the same scale).
 
