@@ -8,6 +8,7 @@ UMB=${UMB:-umb}
 read_arg() { python3 -c 'import json,sys; a=json.loads(sys.argv[1]); v=a.get(sys.argv[2], json.loads(sys.argv[3])); print("\n".join(v) if isinstance(v, list) else v)' "$1" "$2" "$3"; }
 QUERY=$(read_arg "$1" query null); [[ "$QUERY" == None ]] && { echo "step failed: args: query is required" >&2; exit 1; }
 LIMIT=$(read_arg "$1" limit 3)
+[[ $LIMIT == <-> ]] || { echo "step failed: args: limit must be a number" >&2; exit 1; }
 SITES=(${(f)"$(read_arg "$1" sites '["amazon.in","flipkart","meesho"]')"})
 ENC=$(python3 -c 'import sys,urllib.parse as u; print(u.quote(sys.argv[1], safe=""))' "$QUERY")
 
@@ -57,7 +58,7 @@ for site in $SITES; do
   [[ $site != $SITES[1] ]] && sleep 4
   tab=$($UMB open "$url") || { echo "step failed: $site: could not open the page"; rc=1; continue; }
   tab=${tab%% *}
-  { js_head; js_$fn; js_tail; } | $UMB run $tab - "{\"site\":\"$site\",\"limit\":$LIMIT}" --max 3000 | sed '$d'
+  { js_head; js_$fn; js_tail; } | $UMB run $tab - "$(python3 -c 'import json,sys; print(json.dumps({"site": sys.argv[1], "limit": int(sys.argv[2])}))' "$site" "$LIMIT")" --max 3000 | sed '$d'
   [[ ${pipestatus[2]} -eq 0 ]] || rc=1
   $UMB close $tab >/dev/null
 done

@@ -19,10 +19,10 @@ LABELS=$(js '() => [...document.querySelectorAll("[role=option]")].filter(e => e
 LABELS=("${(@f)LABELS}")
 # The search always pads its list with unrelated items (Find in document, Font list): only a label with the command's first word counts.
 STEM=${${(L)${CMD%% *}}[1,4]}
-IDX=${LABELS[(i)(#i)*${STEM}*]}
+IDX=${LABELS[(i)(#i)*${(b)STEM}*]}
 (( IDX <= ${#LABELS} )) || fail search "no menu command matches \"$CMD\""
 if [ -n "$PICK" ]; then
-  IDX=${LABELS[(i)(#i)*${PICK}*]}
+  IDX=${LABELS[(i)(#i)*${(b)PICK}*]}
   (( IDX <= ${#LABELS} )) || fail pick "no result contains \"$PICK\"; results: ${(j: | :)LABELS[1,6]}"
 fi
 # Some panels (Chart editor) need over a second to load: after Enter, wait until the title changes, at most 2.4 s.
