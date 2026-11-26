@@ -50,6 +50,35 @@ Two requirements follow from the spikes:
 1. Every action and every recipe verifies the result. "The click ran" is not "it worked".
 2. Helpers need find-by-text, and toggles need a check of the current state before clicking.
 
+## After phases 1 and 2: screener task rerun (2026-11-26)
+
+Same task, same model size, fresh session, using `umb snap`, `click`, `fill`, `wait` and `evaluate_script`. No `run` command and no recipes yet. One run.
+
+| Measure | v1 | v2 so far | Change |
+|---|---|---|---|
+| Agent tool calls | 19 | 12 | 37% fewer |
+| Wrapper commands | about 85 (agent's estimate) | 36 (usage log) | about 58% fewer |
+| Failed commands | about 20 | 0 | |
+| Repeats | not counted | 4 | |
+| Tokens (session total) | 74k | 66k | 11% fewer |
+| Time | 238 s | 164 s | 31% fewer |
+| Page text returned | 6,000 to 7,000 chars (estimate) | 13,934 chars (usage log) | more |
+| Result correct | yes, after redoing 5 filters | yes, first pass, verified from the table | |
+
+Reading it:
+
+- Failures went from about 20 to 0. Stable refs and the checks in `click` and `fill` removed the redo loop.
+- Tool calls are 37% down, just under the 40% bar, before recipes exist.
+- Page text returned went up, not down. The agent read the dialog's search results with `evaluate_script` because `snap` did not show them. This fails the "no more page text than v1" condition for now.
+- Session tokens barely moved, because most of a short session is the fixed prompt and instructions, not page text.
+
+Problems this run found in v2:
+
+1. `snap` shows no line for clickable plain text, such as the filter dialog's search results. `--find` cannot find them either. `click text:"..."` does work on them.
+2. `snap --delta` after a plain `snap` printed the whole page. A plain snap did not count as the baseline.
+3. The "no lines match" message does not say what was searched.
+4. A text target that matches nothing gives no near-miss hint.
+
 ### Not tested
 
 - Sites that reject scripted input (some banking and checkout pages).
