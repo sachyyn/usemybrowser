@@ -206,6 +206,23 @@ Reading it:
 
 During grading, a script bug in the grading agent closed a tab that was already open in the browser. Nothing in the tool stops an agent from acting on a tab it did not open. Tab ownership moves to the top of the list.
 
+### Shoe research task, three runs per tool
+
+Two more runs per tool, graded blind by a second grading session with the same checklist (so scores from the two sessions may not be on exactly the same scale).
+
+| Tool | Cost per run | Average | Turns | Checklist score (of 27) | Average | Links loading the named shoe | Stated prices matching the page |
+|---|---|---|---|---|---|---|---|
+| v2 (`umb`) | $0.27, $0.22, $0.35 | $0.28 | 29, 22, 32 | 21.5, 21.5, 23.5 | 22.2 | 14 of 14 | 13 of 14 |
+| v1 (`helium`) | $0.43, $0.26, $0.27 | $0.32 | 38, 23, 21 | 23.5, 21, 22.5 | 22.3 | 11 of 11 | 10 of 10 |
+| browse 0.1.5 | $0.54, $0.42, $0.31 | $0.42 | 46, 33, 28 | 22.5, 24.5, 22.5 | 23.2 | 10 of 11 | 10 of 10 |
+
+Reading it:
+
+- Quality is level across the three tools within the spread of single runs (each tool's own scores range over 2 to 2.5 points). v2's last place in the first round was noise.
+- browse scored about one point higher on average and cost about 50% more than v2. v2 and v1 are within 13% on cost, which is inside the run-to-run spread.
+- On a research task with no site notes, the tool makes little difference to cost or quality. The large saving measured on the Sheets task came from site notes.
+- Weaknesses the grader found were about research habits, not tools: rankings from memory with no source opened, evidence borrowed from a different shoe model, and a top pick that ignored a cheaper deal on the same site.
+
 ### Not tested
 
 - Sites that reject scripted input (some banking and checkout pages).
