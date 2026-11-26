@@ -1,0 +1,169 @@
+#!/bin/zsh
+# umb: drive your own running Chromium browser through one persistent chrome-devtools daemon.
+# One daemon = one remote-debugging connection = one "Allow" click per browser launch.
+# Usage: umb snap|click|fill|wait|open|tabs|close|text|check ...   (see the usage text below)
+#        umb <any other chrome-devtools command> [args]   e.g. umb take_screenshot 3
+#        umb start | status | stop
+# Page work runs as one script per call: vendor/browse/capture.js + lib/page.js + the operation.
+zmodload zsh/datetime
+ROOT=${${0:A}:h:h}
+CACHE="$HOME/.cache/umb"; mkdir -p "$CACHE"
+
+# Usage log: re-run this script as a child, count what it printed, append one line (no content, no
+# arguments, host only) to the usage log. Logging never changes the output or the exit code.
+# UMB_NO_LOG=1 turns it off; UMB_TASK=<name> tags the lines; `umb cost` reads them.
+if [[ "$1" == cost ]]; then exec python3 "$ROOT/lib/cost.py" "${@:2}"; fi
+if [[ -z "$UMB_INNER" ]]; then
+  t0=$EPOCHREALTIME; OUT=$(mktemp)
+  UMB_INNER=1 "${0:A}" "$@" > "$OUT"; rc=$?
+  cat "$OUT"
+  [[ -n "$UMB_NO_LOG" ]] || python3 "$ROOT/lib/log.py" "$1" "$2" "$rc" "$(( (EPOCHREALTIME - t0) * 1000 ))" "$OUT" "$CACHE" 2>/dev/null
+  rm -f "$OUT"; exit $rc
+fi
+# Local install (npm --prefix ~/.local/share/helium-cdt chrome-devtools-mcp@1.13.0): fast, works offline/sandboxed.
+CDT=("$HOME/.local/share/helium-cdt/node_modules/.bin/chrome-devtools")
+[ -x "${CDT[1]}" ] || CDT=(npx -y -p chrome-devtools-mcp@1.13.0 chrome-devtools)
+# The browser's profile folder: Helium if present, else Chrome.
+UMB_DIR="${USEMYBROWSER_DIR:-$HOME/Library/Application Support/net.imput.helium}"
+[ -n "$USEMYBROWSER_DIR" ] || [ -d "$UMB_DIR" ] || UMB_DIR="$HOME/Library/Application Support/Google/Chrome"
+
+die() { echo "umb: $*" >&2; exit 1; }
+
+# Run chrome-devtools without its "Update available ..." notice (3 lines: two of text, one blank).
+cdt() { "${CDT[@]}" "$@" 2>&1 | sed -e '/^Update available/{N;N;d;}'; }
+
+start_daemon() {
+  "${CDT[@]}" start --autoConnect --userDataDir "$UMB_DIR" --categoryExtensions=false --no-usage-statistics --no-performance-crux
+}
+
+case "$1" in
+  start) start_daemon; exit $? ;;
+  status|stop) cdt "$@"; exit 0 ;;
+  ""|-h|--help|help)
+    echo "usage: umb snap <tab> [--find re] [--interactive] [--within css] [--delta] [--max n]"
+    echo "       umb click <tab> <ref|text:\"Exact text\"|css:\"sel\"> [--force]"
+    echo "       umb fill <tab> <target> <value>"
+    echo "       umb wait <tab> [--text s] [--gone s] [--url s] [--ref eN|--css sel] [--timeout ms]"
+    echo "       umb open <url> | tabs | close <tab> | text <tab> [css] [max] | check <tab> \"question\""
+    echo "       umb <other chrome-devtools command>"; exit 0 ;;
+esac
+
+# Start only when no daemon runs or the running one is not attached to this profile. Never restart a
+# healthy daemon: each restart opens a new connection and the browser asks the user to Allow again.
+STATUS=$(cdt status)
+if [[ "$STATUS" != *"is running"* || "$STATUS" != *"$UMB_DIR"* ]]; then
+  start_daemon >/dev/null 2>&1 || die "could not start the daemon (sandboxed agent? run it outside the sandbox)"
+fi
+
+pages() { cdt list_pages --output-format json; }
+need_tab() { [[ "$1" == <-> ]] || die "usage: umb $CMD <tab id> ... (ids from: umb tabs)"; }
+
+# Run one page operation. Prints its result; exits 1 with the page's error on stderr.
+# $1=tab $2=op, rest=args. Sets PAGE_RC to 2 when a wait condition is not met yet.
+page_op() {
+  local tab=$1 op=$2; shift 2
+  local sf="$CACHE/state-$tab.json" js="$CACHE/script-$tab.js" state='{}'
+  [ -f "$sf" ] && state=$(<"$sf")
+  { echo 'async () => {'; cat "$ROOT/vendor/browse/capture.js" "$ROOT/lib/page.js"
+    printf 'return await umbMain(%s, %s, %s);\n}\n' "\"$op\"" "$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1:]))' "$@")" "$state"
+  } > "$js"
+  cdt evaluate_script --pageId "$tab" --sourcePath "$js" --output-format json | python3 -c '
+import json, re, sys
+raw, state_file = sys.stdin.read(), sys.argv[1]
+try:
+    j = json.loads(raw); msg = j["message"] if isinstance(j, dict) else j[0]["text"]
+except Exception:
+    sys.exit("umb: unexpected reply from chrome-devtools: " + raw[:300])
+m = re.search(r"```json\n(.*)\n```", msg, re.S)
+if not m: sys.exit("umb: " + re.sub(r"^Error: ", "", msg.strip())[:400])
+r = json.loads(m.group(1))
+if r.get("error"): sys.exit("umb: " + r["error"])
+if "state" in r: open(state_file, "w").write(json.dumps(r["state"]))
+print(r["out"]); sys.exit(0 if r.get("done", True) else 2)' "$sf"
+}
+
+# One line saying what an action changed: url, title, new tabs. $1=tab $2=pages before $3=pages after.
+what_changed() {
+  python3 -c '
+import json, sys
+tab = int(sys.argv[1]); b, a = [{p["id"]: p for p in json.loads(s)["pages"]} for s in sys.argv[2:4]]
+x, y, out = b.get(tab), a.get(tab), []
+if not y: out.append("tab closed")
+elif x and x["url"] != y["url"]: out.append("url -> " + y["url"] + " (navigated)")
+else: out.append("url unchanged")
+if x and y and x["title"] != y["title"]: out.append("title -> \"" + y["title"] + "\"")
+out += ["new tab %d \"%s\" %s" % (p["id"], p["title"], p["url"]) for i, p in a.items() if i not in b]
+print("; ".join(out))' "$@"
+}
+
+act() {  # click|fill: run the op, then report what changed
+  local tab=$1 before after out
+  before=$(pages); out=$(page_op "$@" 2>&1)
+  # A click that navigates destroys the page script before it can report; the click did happen.
+  if [[ $? -ne 0 ]]; then
+    [[ "$out" == *"context was destroyed"* ]] && out="clicked ${3:-target}" || { echo "$out" >&2; exit 1; }
+  fi
+  sleep 0.4; after=$(pages)
+  echo "$out; $(what_changed "$tab" "$before" "$after")"
+}
+
+CMD=$1
+case "$CMD" in
+  snap) need_tab "$2"; page_op "$2" snap "${@:3}" ;;
+  click|fill) need_tab "$2"; act "$2" "$CMD" "${@:3}" ;;
+  wait)
+    need_tab "$2"; tab=$2; shift 2
+    ms=10000
+    for ((i = 1; i < $#; i++)); do [[ "${@[i]}" == --timeout ]] && ms=${@[i+1]}; done
+    [[ "$ms" == <-> ]] || die "--timeout must be a number of milliseconds"
+    deadline=$(( EPOCHREALTIME + ms / 1000.0 ))
+    while true; do
+      out=$(page_op "$tab" wait "$@"); rc=$?
+      [ $rc -eq 0 ] && { echo "$out"; exit 0; }
+      [ $rc -ne 2 ] && exit 1   # a navigation can interrupt one poll; page_op prints the error
+      (( EPOCHREALTIME > deadline )) && die "wait timed out after ${ms}ms: $out"
+      sleep 0.25
+    done ;;
+  open)
+    [ -n "$2" ] || die "usage: umb open <url>"
+    cdt new_page "$2" --background --output-format json | python3 -c '
+import json, sys
+raw = sys.stdin.read()
+try: p = max(json.loads(raw)["pages"], key=lambda p: p["id"])
+except Exception: sys.exit("umb: could not open the page: " + raw[:300])
+print("%d \"%s\" %s" % (p["id"], p["title"], p["url"]))' ;;
+  tabs)
+    pages | python3 -c '
+import json, sys
+for p in json.load(sys.stdin)["pages"]:
+    print("%d%s \"%s\" %s" % (p["id"], "*" if p["selected"] else "", p["title"][:60], p["url"][:100]))' ;;
+  close)
+    need_tab "$2"; out=$(cdt close_page "$2" --output-format json)
+    [[ "$out" == *'"Error'* ]] && die "could not close tab $2: ${out:0:200}"
+    rm -f "$CACHE/state-$2.json" "$CACHE/script-$2.js"; echo "closed $2" ;;
+  check)
+    # umb check <tab> "<yes/no question>" [decide options]: screenshot + Gemini Decision in one step.
+    [ $# -ge 3 ] || die "usage: umb check <tab> \"<question>\" [decide options]"
+    SHOT="$CACHE/check-$2.jpeg"
+    cdt take_screenshot "$2" --filePath "$SHOT" --format jpeg --quality 70 >/dev/null || die "screenshot failed for tab $2"
+    Q="$3"; shift 3
+    exec decide -q "$Q" "$@" "@$SHOT" ;;
+  text)
+    # umb text <tab> [css selector] [max chars]: readable text of one part of the page (default: main
+    # content, else body), blank runs squeezed, capped (default 4000).
+    [ $# -ge 2 ] || die "usage: umb text <tab> [css selector] [max chars]"
+    SEL=$(printf %s "$3" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')
+    MAX="${4:-4000}"; [[ "$MAX" == <-> ]] || die "max chars must be a number"
+    # Matches nested inside another match are dropped so text is not repeated.
+    JS="() => { const sel = $SEL;
+      const all = sel ? [...document.querySelectorAll(sel)] : [document.querySelector('main, [role=main]') || document.body];
+      const top = all.filter(e => !all.some(o => o !== e && o.contains(e)));
+      if (!top.length) return 'umb: no element matches ' + sel;
+      const t = top.map(e => e.innerText.replace(/[ \\t]+\\n/g, '\\n').replace(/\\n{3,}/g, '\\n\\n').trim()).filter(Boolean).join('\\n---\\n');
+      return t.length > $MAX ? t.slice(0, $MAX) + '\\n-- cut at $MAX of ' + t.length + ' chars' : t; }"
+    cdt evaluate_script --pageId "$2" --waitForStableDom false "$JS" \
+      | python3 -c 'import json,re,sys; s=sys.stdin.read(); m=re.search(r"```json\n(.*)\n```", s, re.S); print(json.loads(m.group(1)) if m else s.strip())' ;;
+  evaluate_script)  # pass-through, minus the "Script ran on page and returned" wrapper
+    cdt "$@" | sed -e '/^Script ran on page and returned:$/d' -e '/^```json$/d' -e '/^```$/d' ;;
+  *) cdt "$@" ;;
+esac
