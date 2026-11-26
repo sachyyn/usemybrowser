@@ -83,7 +83,11 @@ def ask(key: str, item: str, question: dict) -> dict:
         with urllib.request.urlopen(req, timeout=60) as r:
             res = json.load(r)
     except urllib.error.HTTPError as e:
-        return {"item": label, "error": f"HTTP {e.code}: {e.read().decode()[:300]}"}
+        # Status code and a short message only: never the raw body, never the key.
+        try: msg = json.loads(e.read().decode(errors="replace"))["error"]["message"]
+        except Exception: msg = ""
+        msg = " ".join(str(msg).replace(key, "***").split())[:120]
+        return {"item": label, "error": f"HTTP {e.code}" + (f": {msg}" if msg else "")}
     except urllib.error.URLError as e:
         return {"item": label, "error": str(e.reason)}
     a = res.get("answers", {}).get("q", {})
@@ -127,7 +131,7 @@ def main() -> None:
 def log_usage(question: str, results: list) -> None:
     """Append one line per run to ~/.local/state/decide/usage.jsonl for cost reviews."""
     tokens = sum(r.get("input_tokens") or 0 for r in results)
-    entry = {"ts": time.strftime("%Y-%m-%dT%H:%M:%S"), "question": question[:200],
+    entry = {"ts": time.strftime("%Y-%m-%dT%H:%M:%S"), "question_chars": len(question),
              "items": len(results), "errors": sum("error" in r for r in results),
              "input_tokens": tokens, "usd": round(tokens * USD_PER_INPUT_TOKEN, 6)}
     path = os.path.expanduser("~/.local/state/decide/usage.jsonl")
